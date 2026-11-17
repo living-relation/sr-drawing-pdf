@@ -56,7 +56,11 @@ If `SRToolsPanel` already exists (for example because another SR add-in created 
 
 ## Usage
 
-Open a design, run **SR Drawing PDF**, pick the PDF path, then click OK on the New Drawing dialog. See [docs/usage.md](docs/usage.md).
+Open a saved design, run **SR Drawing PDF**, pick the PDF path, then click OK on the New Drawing dialog. See [docs/usage.md](docs/usage.md).
+
+Safety: if the active document is not a design (for example a drawing tab), or the design was never saved, the add-in shows a short message and does nothing. It waits up to 5 minutes for the new drawing and ignores every other document that becomes active, without message boxes or errors, so it cannot lock Fusion up the way the first version did.
+
+This add-in is a stopgap. The plan is to replace it with the agent-driven drawing loop.
 
 ## Documentation
 

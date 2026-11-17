@@ -62,7 +62,8 @@ class _Created(adsk.core.CommandCreatedEventHandler):
                 ev.add(h)
                 _handlers.append(h)
             if design is None:
-                _app_ui().messageBox('Open a design first.')
+                inputs.itemById('note').formattedText = ('The active document is not a design. Switch to a design '
+                                                         'tab first; OK does nothing here.')
         except Exception:
             _app_ui().messageBox('SR Drawing PDF failed to open:\n' + traceback.format_exc())
 
@@ -105,6 +106,10 @@ class _Execute(adsk.core.CommandEventHandler):
             if not path.lower().endswith('.pdf'):
                 path += '.pdf'
             settings.save(SETTINGS, {'pdf_path': path})
+            if adsk.fusion.Design.cast(adsk.core.Application.get().activeProduct) is None:
+                _app_ui().messageBox('The active document is not a design. Switch to a design tab first.',
+                                     'SR Drawing PDF')
+                return
             start_export(path)
         except Exception:
             _app_ui().messageBox('SR Drawing PDF failed:\n' + traceback.format_exc())
@@ -139,31 +144,89 @@ def _remove_ui(ui):
 
 def stop(context):
     try:
+        _stop_listening()
         _remove_ui(_app_ui())
         _handlers.clear()
     except Exception:
         pass
 
 
+def product_of(doc, product_type):
+    """The document's product of this type, or None. Never raises: Fusion's itemByProductType throws
+    'RuntimeError: 3 : failed to find product' when a document has no such product (for example asking a
+    design for its drawing), and that error inside an event handler is what Daniel hit."""
+    try:
+        prods = doc.products
+        for i in range(prods.count):
+            p = prods.item(i)
+            if p.productType == product_type:
+                return p
+    except Exception:
+        pass
+    return None
+
+
+LISTEN_SECONDS = 300  # stop waiting for the new drawing after this long (cancelled New Drawing dialog)
+SETUP_EVENT = 'srDrawingPdfSetup'
+_listener = None
+_setup_event = None
+_listen_started = 0.0
+_pending = {}
+
+
+def _stop_listening():
+    """Remove the documentActivated listener and the custom event. Safe to call twice."""
+    global _listener, _setup_event
+    app = adsk.core.Application.get()
+    if _listener is not None:
+        try:
+            app.documentActivated.remove(_listener)
+        except Exception:
+            pass
+        if _listener in _handlers:
+            _handlers.remove(_listener)
+        _listener = None
+    if _setup_event is not None:
+        try:
+            app.unregisterCustomEvent(SETUP_EVENT)
+        except Exception:
+            pass
+        _setup_event = None
+
+
 def start_export(pdf_path=None):
-    global _app, _ui, _design_doc, _design, _pdf_path
+    """Check the active document is a design, then open Fusion's New Drawing dialog and wait for the drawing.
+
+    Fail-safe rules (the old version locked Fusion up):
+    - never call itemByProductType (it raises); use product_of()
+    - a document that is not a design gets a clear message and nothing else happens
+    - the documentActivated handler never shows a message box, never sleeps and never raises; it only
+      hands the drawing to a custom event, so the drawing work runs after Fusion finishes opening it
+    - only one listener at a time, and it gives up after LISTEN_SECONDS
+    """
+    global _app, _ui, _design_doc, _design, _pdf_path, _listener, _setup_event, _listen_started
 
     _app = adsk.core.Application.get()
     _ui = _app.userInterface
-
     try:
+        _stop_listening()
         _design_doc = _app.activeDocument
-        _design = adsk.fusion.Design.cast(
-            _design_doc.products.itemByProductType('DesignProductType')
-        )
+        if _design_doc is None:
+            _ui.messageBox('Open a design first.', 'SR Drawing PDF')
+            return False
+        _design = adsk.fusion.Design.cast(product_of(_design_doc, 'DesignProductType'))
         if not _design:
-            _ui.messageBox('Please open a Fusion 360 design file first.')
-            return
+            kind = 'a drawing' if product_of(_design_doc, 'DrawingProductType') else 'not a design'
+            _ui.messageBox('The active document (%s) is %s.\n\nSwitch to the design tab you want a drawing of, '
+                           'then run SR Drawing PDF again.' % (_design_doc.name, kind), 'SR Drawing PDF')
+            return False
+        if not _design_doc.isSaved:
+            _ui.messageBox('Save the design once before making a drawing of it (Fusion makes drawings only from '
+                           'saved designs).', 'SR Drawing PDF')
+            return False
 
         if pdf_path:
             _pdf_path = pdf_path
-            if not _pdf_path.lower().endswith('.pdf'):
-                _pdf_path += '.pdf'
         else:
             dlg = _ui.createFileDialog()
             dlg.title = 'SR Drawing PDF'
@@ -171,65 +234,73 @@ def start_export(pdf_path=None):
             dlg.initialFilename = _design_doc.name + '_drawing'
             dlg.isMultiSelectEnabled = False
             if dlg.showSave() != adsk.core.DialogResults.DialogOK:
-                return
+                return False
             _pdf_path = dlg.filename
-            if not _pdf_path.lower().endswith('.pdf'):
-                _pdf_path += '.pdf'
+        if not _pdf_path.lower().endswith('.pdf'):
+            _pdf_path += '.pdf'
 
-        # Register a documentActivated listener -- fires when the new drawing opens
-        handler = DrawingActivatedHandler()
-        _handlers.append(handler)
-        _app.documentActivated.add(handler)
-
-        # Trigger the New Drawing dialog (user just clicks OK)
-        triggered = False
-        for cmd_id in ['FusionDrawingCreateFromComponentsCommand',
-                        'NewDrawingMenuCommand',
-                        'NewFusionDrawingDocumentCommand']:
-            cmdDef = _ui.commandDefinitions.itemById(cmd_id)
-            if cmdDef:
-                cmdDef.execute()
-                triggered = True
+        cmd_def = None
+        for cmd_id in ('FusionDrawingCreateFromComponentsCommand', 'NewDrawingMenuCommand',
+                       'NewFusionDrawingDocumentCommand'):
+            cmd_def = _ui.commandDefinitions.itemById(cmd_id)
+            if cmd_def:
                 break
+        if cmd_def is None:
+            _ui.messageBox('This Fusion version has no New Drawing command the add-in can open.\n'
+                           'Make the drawing with File > New Drawing > From Design instead.', 'SR Drawing PDF')
+            return False
 
-        if not triggered:
-            _ui.messageBox(
-                'The add-in is ready and listening.\n\n'
-                'Please create a new drawing manually via:\n'
-                '   File > New Drawing > From Design\n\n'
-                'It will automatically add views and export '
-                'the PDF as soon as the drawing opens.'
-            )
-
+        _setup_event = _app.registerCustomEvent(SETUP_EVENT)
+        sh = _SetupHandler()
+        _setup_event.add(sh)
+        _handlers.append(sh)
+        _listener = DrawingActivatedHandler()
+        _handlers.append(_listener)
+        _app.documentActivated.add(_listener)
+        _listen_started = time.time()
+        cmd_def.execute()
+        return True
     except Exception:
-        _ui.messageBox('Error:\n' + traceback.format_exc())
+        _stop_listening()
+        _ui.messageBox('SR Drawing PDF could not start:\n' + traceback.format_exc(), 'SR Drawing PDF')
+        return False
 
 
 class DrawingActivatedHandler(adsk.core.DocumentEventHandler):
-    """Fires whenever any document becomes active. We check if it is a drawing."""
+    """Fires whenever any document becomes active. Ignores everything that is not a drawing. Never shows UI,
+    never sleeps and never raises (a modal box or an exception while Fusion opens a document can hang it)."""
 
     def notify(self, args):
         try:
-            doc = args.document
-
-            drawing = adsk.drawing.Drawing.cast(
-                doc.products.itemByProductType('DrawingProductType')
-            )
-            if not drawing:
+            if time.time() - _listen_started > LISTEN_SECONDS:
+                _stop_listening()
                 return
-
-            _app.documentActivated.remove(self)
-            # keep other handlers (command created/execute); only drop this listener
-            if self in _handlers:
-                _handlers.remove(self)
-
-            adsk.doEvents()
-            time.sleep(1.5)   # let Fusion finish loading the drawing
-
-            setup_drawing(drawing, doc)
-
+            doc = args.document
+            if product_of(doc, 'DrawingProductType') is None:
+                return  # the design (or another document) became active: keep waiting
+            _pending['doc'] = doc
+            try:
+                adsk.core.Application.get().documentActivated.remove(self)
+            except Exception:
+                pass
+            # run the drawing work later, after Fusion has finished activating the drawing
+            adsk.core.Application.get().fireCustomEvent(SETUP_EVENT, '')
         except Exception:
-            _ui.messageBox('Error (event handler):\n' + traceback.format_exc())
+            _stop_listening()
+
+
+class _SetupHandler(adsk.core.CustomEventHandler):
+    def notify(self, args):
+        doc = _pending.pop('doc', None)
+        _stop_listening()
+        if doc is None:
+            return
+        drawing = adsk.drawing.Drawing.cast(product_of(doc, 'DrawingProductType'))
+        if not drawing:
+            _app_ui().messageBox('SR Drawing PDF: the new document is not a drawing; nothing was done.',
+                                 'SR Drawing PDF')
+            return
+        setup_drawing(drawing, doc)
 
 
 def setup_drawing(drawing, draw_doc):
@@ -253,7 +324,6 @@ def setup_drawing(drawing, draw_doc):
         bi.viewStyle     = adsk.drawing.DrawingViewStyles.VisibleAndHiddenEdgesDrawingViewStyle
         front = sheet.drawingViews.addBaseView(bi)
         adsk.doEvents()
-        time.sleep(0.5)
 
         # ── Projected views ───────────────────────────────────────────────────
         def proj(parent, x, y):
@@ -275,7 +345,6 @@ def setup_drawing(drawing, draw_doc):
             pass
 
         adsk.doEvents()
-        time.sleep(0.5)
 
         # ── Overall bounding dimensions ───────────────────────────────────────
         try:

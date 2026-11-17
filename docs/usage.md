@@ -20,6 +20,9 @@ A message box reports the PDF path when the export finishes. The design document
 
 ## Limits and known issues
 
+- The active document must be a saved design. A drawing tab, or a design that was never saved, gets a short message and nothing else happens.
+- If you cancel the New Drawing dialog, the add-in stops waiting for the drawing after 5 minutes, or as soon as you run it again.
+
 - You must click OK on the New Drawing dialog. That confirmation cannot be skipped.
 - Dimensions are best-effort. If Fusion will not attach them, the PDF is still exported.
 - View layout is fixed for an A3 landscape sheet. Very large or very small models may need a manual scale change; the add-in uses automatic scale for the base view.
