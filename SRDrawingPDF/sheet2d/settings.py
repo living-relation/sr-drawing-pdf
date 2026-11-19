@@ -1,0 +1,149 @@
+"""Title-block defaults and the drawing initials rule.
+
+Project name, first match wins:
+  1. the document property (a spec value)
+  2. environment: DRAWING_PROJECT
+  3. local.toml next to the add-in, [drawing] project = "..."
+  4. neutral default: "PROJECT"
+
+Initials (DRAWN in the title block, BY in the rev log):
+  - DRAWN is the initials on Rev A. It does not change on later letters.
+  - BY is the initials of the person who asked for that change.
+  - An agent or tool name is never valid, and nothing is guessed.
+The person's initials come from, first match wins:
+  1. environment: DRAWING_INITIALS
+  2. the per-computer file ~/.drawing-initials (one line, for example DG)
+  3. WSL only: the Windows profile file when exactly one value is found
+If none is set, a person at a terminal is asked once. With no terminal the
+call raises InitialsMissing. The editor commands do not ask; the caller
+passes initials.
+"""
+import glob
+import os
+import re
+import sys
+
+try:
+    import tomllib
+except ImportError:  # Python < 3.11
+    tomllib = None
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+DEFAULTS = {'project': 'PROJECT'}
+ENV = {'project': 'DRAWING_PROJECT'}
+
+INITIALS_ENV = 'DRAWING_INITIALS'
+INITIALS_FILENAME = '.drawing-initials'
+INITIALS_RE = re.compile(r'^[A-Z]{2,4}$')
+# Names of agents and tools, and placeholders. Compared after lower-casing.
+BANNED = frozenset(n.lower() for n in (
+    'claude', 'stevecad', 'steve', 'sc', 'grok', 'grokbot', 'fairsolid', 'cursor', 'codex', 'gpt', 'gemini', 'copilot',
+    'agent', 'bot', 'tool', 'system', 'auto', 'script', 'unknown', 'none', 'null', 'tbd', 'xx', 'xxx'))
+
+
+class InitialsMissing(RuntimeError):
+    """No requester initials configured and no person to ask."""
+
+
+def bad_initials(s):
+    """Why `s` is not valid DRAWN / BY initials, or None when it is fine."""
+    s = (s or '').strip()
+    if not s:
+        return 'blank'
+    if s.lower() in BANNED or re.sub(r'[^a-z]', '', s.lower()) in BANNED:
+        return '%r is an agent / tool / placeholder name' % s
+    if not INITIALS_RE.match(s.upper()):
+        return '%r is not 2-4 letters (a person\'s initials)' % s
+    return None
+
+
+def check_initials(s):
+    """Return `s` normalised (upper case) or raise ValueError."""
+    why = bad_initials(s)
+    if why:
+        raise ValueError('bad initials: %s' % why)
+    return s.strip().upper()
+
+
+def initials_path(home=None):
+    return os.path.join(home or os.path.expanduser('~'), INITIALS_FILENAME)
+
+
+def _read_file(p):
+    try:
+        with open(p, encoding='utf-8') as f:
+            return f.readline().strip()
+    except OSError:
+        return ''
+
+
+def read_initials(environ=None, home=None, windows_homes=None):
+    """The configured requester initials, or '' when none is set. Does not prompt and does not validate."""
+    environ = os.environ if environ is None else environ
+    v = (environ.get(INITIALS_ENV) or '').strip()
+    if v:
+        return v
+    v = _read_file(initials_path(home))
+    if v:
+        return v
+    if windows_homes is None:
+        windows_homes = glob.glob('/mnt/c/Users/*') if os.path.isdir('/mnt/c/Users') else []
+    found = {_read_file(os.path.join(h, INITIALS_FILENAME)) for h in windows_homes} - {''}
+    return found.pop() if len(found) == 1 else ''
+
+
+def requester_initials(environ=None, home=None, windows_homes=None, stdin=None, stdout=None, ask=input):
+    """Initials of the person requesting this change.
+
+    Missing + interactive terminal: ask once and save ~/.drawing-initials.
+    Missing + no terminal: raise InitialsMissing.
+    """
+    v = read_initials(environ, home, windows_homes)
+    if v:
+        return check_initials(v)
+    stdin = sys.stdin if stdin is None else stdin
+    stdout = sys.stdout if stdout is None else stdout
+    p = initials_path(home)
+    if not (stdin and stdout and stdin.isatty() and stdout.isatty()):
+        raise InitialsMissing(
+            'No drawing initials set. Put the requesting person\'s initials (2-4 letters, e.g. DG) in %s '
+            'or set %s. Agents must not guess or use an agent / tool name: ask the person who is requesting '
+            'the change, or stop.' % (p, INITIALS_ENV))
+    while True:
+        a = ask('Drawing initials of the person requesting this change (2-4 letters, saved to %s): ' % p)
+        why = bad_initials(a)
+        if not why:
+            break
+        print('  ' + why, file=stdout)
+    a = a.strip().upper()
+    with open(p, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(a + '\n')
+    return a
+
+
+def read_local(root=ROOT):
+    p = os.path.join(root, 'local.toml')
+    if not os.path.isfile(p) or tomllib is None:
+        return {}
+    with open(p, 'rb') as f:
+        return tomllib.load(f)
+
+
+def title_defaults(root=ROOT, environ=None):
+    """{'project': ...} from env, then local.toml [drawing], then the neutral default."""
+    environ = os.environ if environ is None else environ
+    sec = (read_local(root).get('drawing') or {})
+    out = {}
+    for k, d in DEFAULTS.items():
+        out[k] = environ.get(ENV[k]) or sec.get(k) or d
+    return out
+
+
+def title_info(info, root=ROOT, environ=None):
+    """Fill a missing project. Spec / document values win. DRAWN is not defaulted here."""
+    d = title_defaults(root, environ)
+    out = dict(info)
+    for k in DEFAULTS:
+        if not out.get(k):
+            out[k] = d[k]
+    return out

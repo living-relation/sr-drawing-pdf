@@ -17,6 +17,10 @@ it from the Scripts tab, and it does not add a toolbar button that stays loaded.
 
 - Autodesk Fusion (the add-in was written against Fusion 360 v2703 and later)
 
+## Sheet editor library
+
+The add-in folder also contains `sheet2d`, a size B (11x17) sheet editor that writes its own PDF. It is not wired to the toolbar button yet. Sheets, the title block, the rev log, the BOM, balloons, and notes are one command API on a JSON drawing. A Fusion panel and an agent call the same functions. See [Sheet editor](sheet-editor.md).
+
 ## Further reading
 
 - [Install](install.md)

@@ -75,7 +75,7 @@ Open a saved design, run **SR Drawing PDF**, pick the PDF path, then click OK on
 
 Safety: if the active document is not a design (for example a drawing tab), or the design was never saved, the add-in shows a short message and does nothing. It waits up to 5 minutes for the new drawing and ignores every other document that becomes active, without message boxes or errors, so it cannot lock Fusion up the way the first version did.
 
-This add-in is a stopgap. The plan is to replace it with the agent-driven drawing loop.
+This button is unchanged. The add-in folder also contains a size B sheet editor (`sheet2d`) that is not on the button yet. It draws the 11x17 frame, title block, rev table, BOM, notes, and balloons, and writes a PDF. The same commands are what an agent calls. See [Sheet editor](docs/sheet-editor.md).
 
 ## Documentation
 
@@ -83,6 +83,7 @@ This add-in is a stopgap. The plan is to replace it with the agent-driven drawin
 - [Install](docs/install.md)
 - [Usage](docs/usage.md)
 - [Development](docs/development.md)
+- [Sheet editor](docs/sheet-editor.md)
 - [Documentation index](docs/README.md)
 
 ## Development

@@ -1,0 +1,94 @@
+"""A short two-sheet sample built only through the command API.
+
+The parts are stand-ins so the public repo does not copy a filed package.
+The sheet chrome (border, zones, title block, rev table, BOM, notes, balloons)
+is what the sample is for. View frames are empty.
+"""
+from .commands import execute
+
+
+def _run(doc, command, **args):
+    out = execute(doc, command, args)
+    return out['document'], out['result']
+
+
+def build_sample():
+    """Return a drawing dict for a two-sheet size B sample."""
+    doc, _result = _run(None, 'add_sheet', id='s1', name='Sheet 1')
+    doc, _result = _run(doc, 'add_sheet', id='s2', name='Sheet 2', scale='AS SHOWN')
+    fields = (
+        ('project', 'SPARK ROBOTIC'),
+        ('title', 'SAMPLE BRACKET ASSEMBLY'),
+        ('pn', 'SR-SAMPLE-100'),
+        ('material', 'SEE BOM'),
+        ('scale', '1:2'),
+        ('units', 'mm'),
+        ('date', '2026-11-19'),
+        ('source', 'SR-SAMPLE-100.step'),
+    )
+    for field, value in fields:
+        doc, _result = _run(doc, 'set_title', field=field, value=value)
+    doc, _result = _run(
+        doc, 'add_revision', rev='A', desc='Initial', by='DG', date='2026-11-01')
+    doc, _result = _run(
+        doc, 'add_revision', rev='B',
+        desc='Bracket width updated and the note list added', by='DG', date='2026-11-09')
+    doc, _result = _run(
+        doc, 'add_revision', rev='C',
+        desc='Sample release for the sheet editor', by='DG', date='2026-11-19')
+
+    rows = [
+        ('p1', 1, 1, 'SR-S-101', 'BRACKET', '6061-T6 AL', True),
+        ('p2', 2, 1, 'SR-S-102', 'PLATE', '6061-T6 AL', True),
+        ('p3', 3, 2, 'SR-S-103', 'PIN', 'A2 STAINLESS', True),
+        ('p4', 4, 4, 'SR-S-104', 'SCREW, M4 x 10', 'A2 STAINLESS', True),
+        ('p5', 5, 4, 'SR-S-105', 'WASHER, M4', 'A2 STAINLESS', False),
+        ('p6', 6, 1, 'SR-S-106', 'COVER, SEE NOTE 2', 'ABS', True),
+        ('p7', 7, 1, 'SR-S-107', 'GASKET', 'NBR 70', True),
+        ('p8', 8, 2, 'SR-S-108', 'STANDOFF', 'NYLON', True),
+        ('p9', 9, 1, 'SR-S-109', 'LABEL', 'POLYESTER', True),
+        ('p10', 10, 6, 'SR-S-110', 'RIVET', 'ALUMINIUM', True),
+        ('p11', 11, 1, 'SR-S-111', 'CLIP', 'A2 STAINLESS', True),
+        ('p12', 12, 2, 'SR-S-112', 'SPACER', 'NYLON', True),
+        ('p13', 13, 1, 'SR-S-113', 'PLUG', 'BRASS', True),
+        ('p14', 14, 1, 'SR-S-114', 'CAP', 'ABS', True),
+    ]
+    for key, item, qty, pn, desc, mat, shown in rows:
+        doc, _result = _run(
+            doc, 'add_bom_row', key=key, item=item, qty=qty, pn=pn, desc=desc, mat=mat, shown=shown)
+
+    doc, _result = _run(doc, 'place_bom', id='bom1', sheet='s1', x1=421.8, ytop=236, max_height=48)
+    doc, _result = _run(doc, 'place_bom', id='bom2', sheet='s2', x1=421.8, ytop=250, max_height=170)
+
+    notes = (
+        ('n1', 'SAMPLE PACKAGE FOR THE SHEET EDITOR. THE VIEW FRAMES ARE EMPTY.'),
+        ('n2', 'AN ITEM MARKED NOT SHOWN HAS NO ITEM BALLOON.'),
+        ('n3', 'A NOTE FLAG USES THE NOTE NUMBER.'),
+    )
+    for key, text in notes:
+        doc, _result = _run(doc, 'add_note', key=key, text=text)
+    doc, _result = _run(doc, 'place_notes', id='notes1', sheet='s1', x=18, y=90, width=100)
+
+    views = (
+        ('v1', 's1', 18, 175, 90, 52, 'FRONT', '1:2'),
+        ('v2', 's1', 116, 175, 90, 52, 'TOP', '1:2'),
+        ('v3', 's1', 18, 112, 90, 52, 'RIGHT', '1:2'),
+        ('v4', 's1', 116, 108, 100, 58, 'TRIMETRIC', None),
+        ('v5', 's2', 22, 130, 150, 90, 'BUILD VIEW', None),
+    )
+    for vid, sheet, x, y, w, h, label, scale in views:
+        doc, _result = _run(
+            doc, 'place_view', id=vid, sheet=sheet, x=x, y=y, w=w, h=h, label=label, scale=scale)
+
+    balloons = (
+        ('b1', 'p1', 210, 155, 190, 145),
+        ('b2', 'p2', 230, 130, 200, 125),
+        ('b3', 'p3', 150, 100, 170, 120),
+        ('b4', 'p6', 200, 175, 185, 155),
+    )
+    for bid, key, x, y, ax, ay in balloons:
+        doc, _result = _run(
+            doc, 'place_balloon', id=bid, sheet='s1', bom_key=key, x=x, y=y, ax=ax, ay=ay)
+    doc, _result = _run(
+        doc, 'place_note_flag', id='f1', sheet='s1', note_key='n1', x=160, y=78, ax=122, ay=82)
+    return doc

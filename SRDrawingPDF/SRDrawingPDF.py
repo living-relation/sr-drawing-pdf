@@ -166,6 +166,55 @@ def product_of(doc, product_type):
     return None
 
 
+def editor_api():
+    """The sheet-editor commands, the copy already loaded in this process.
+
+    Agents call this on the add-in module Fusion loaded. It looks in
+    sys.modules first and does not put this folder on sys.path again when
+    the folder is already there.
+    """
+    import importlib
+    import sys
+    here = os.path.dirname(os.path.abspath(__file__))
+
+    def _real(path):
+        # realpath follows the junction Fusion uses for AddIns, and a symlink.
+        return os.path.normcase(os.path.realpath(path))
+
+    package_root = _real(os.path.join(here, 'sheet2d')) + os.sep
+
+    def _from_here(mod):
+        path = getattr(mod, '__file__', None) or ''
+        if not path:
+            return False
+        return _real(path).startswith(package_root)
+
+    named = sys.modules.get('sheet2d.commands')
+    if named is not None and getattr(named, 'API_ID', None) == 'srDrawingPdfSheetApi':
+        if _from_here(named):
+            return named
+        raise RuntimeError(
+            'sheet2d.commands is already loaded from a different folder. '
+            'Restart Fusion so only this add-in is loaded.')
+    for mod in list(sys.modules.values()):
+        if getattr(mod, 'API_ID', None) == 'srDrawingPdfSheetApi' and _from_here(mod):
+            return mod
+    target = _real(here)
+    already = False
+    for entry in sys.path:
+        if not entry:
+            continue
+        try:
+            if _real(entry) == target:
+                already = True
+                break
+        except OSError:
+            continue
+    if not already:
+        sys.path.insert(0, here)
+    return importlib.import_module('sheet2d.commands')
+
+
 LISTEN_SECONDS = 300  # stop waiting for the new drawing after this long (cancelled New Drawing dialog)
 SETUP_EVENT = 'srDrawingPdfSetup'
 _listener = None
