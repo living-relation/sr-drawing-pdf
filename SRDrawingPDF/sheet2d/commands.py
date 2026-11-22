@@ -41,6 +41,12 @@ from .revs import (
 from .settings import check_initials
 from .annotate import VIEW_KINDS, hole_callout_lines, hole_note_text, normalize_hole_tol, normalize_tol
 from .annotate import view_caption as caption_lines
+from .annotate import block_text, block_tiers, normalize_tiers, scale_value
+from .detail import next_letter, normalize_detail
+from .suggest import CLUSTER_MM, MIN_CLUSTER, SMALL_MM, find_candidates, status_bar
+from .model import BOM_ANCHORS, bom_regions, resolved_view
+
+ROW_LINKS = ('thumbnail', 'component')
 from .render import dimension_text, export_pdf as write_document_pdf
 
 API_ID = 'srDrawingPdfSheetApi'
@@ -84,6 +90,17 @@ COMMAND_DOCS = {
     'move_view': 'Move or change a view frame. id is required.',
     'delete_view': 'Delete a view frame. Missing id is a no-op.',
     'view_caption': 'The caption lines a view will print (empty at the sheet scale).',
+    'add_detail_view': 'Engineer-only: add or edit a detail view (SOLIDWORKS Detail View options). Never added automatically.',
+    'suggest_details': 'Flag places that may want a detail view (section features, crowded small features). Changes no sheet.',
+    'add_suggestion': 'Record one suggestion from an outside AI pass. Changes no sheet.',
+    'list_suggestions': 'All suggestions with their status.',
+    'status_bar': 'What the app status bar shows: a yellow ! while any suggestion is open.',
+    'accept_suggestion': 'Engineer accepts a suggestion: adds the detail view it describes.',
+    'dismiss_suggestion': 'Engineer dismisses a suggestion.',
+    'set_tolerance_tiers': 'Set the block tolerance tiers (by decimals) and angle tolerance. Printed in the title block.',
+    'split_table': 'Split a BOM piece above or below a row. The new piece keeps its header and can be moved.',
+    'merge_tables': 'Merge a split piece back into the piece before it.',
+    'select_bom_row': 'A BOM row\'s thumbnail and the balloons and views to highlight for it.',
     'set_hole_tolerance': 'Set the size and position tolerance for every hole in the file, and where it is called out.',
     'place_dimension': 'Place or move a linear dimension. Optional tol (pm, dev, limits, basic, ref); none uses the general tolerance.',
     'move_dimension': 'Move a dimension or change its tolerance. id is required.',
@@ -219,7 +236,9 @@ def _cmd_title_block(doc, args):
         'material': info.get('material') or '',
         'scale': info.get('scale') or '',
         'units': info.get('units') or 'mm',
-        'size': info.get('size_label') or '',
+        'size': info.get('size') or '',
+        'size_label': info.get('size_label') or '',
+        'tol_block': info.get('tol') or '',
         'sheet': '%d OF %d' % (index + 1, len(doc.sheets)),
         'date': info.get('date') or '',
         'drawn': info.get('drawn') or '',
@@ -323,7 +342,7 @@ def _cmd_add_bom_row(doc, args):
     if key:
         for row in doc.bom:
             if row.get('key') == key:
-                for field in ('qty', 'pn', 'desc', 'mat', 'shown', 'item'):
+                for field in ('qty', 'pn', 'desc', 'mat', 'shown', 'item') + ROW_LINKS:
                     if field in args:
                         row[field] = _qty(args[field]) if field == 'qty' else args[field]
                 return {'key': key, 'item': row.get('item')}
@@ -334,7 +353,11 @@ def _cmd_add_bom_row(doc, args):
         item = args['item']
     else:
         item = 1 + max([r.get('item') or 0 for r in doc.bom] or [0])
-    doc.bom.append(_row_from_args(args, key, item))
+    row = _row_from_args(args, key, item)
+    for field in ROW_LINKS:
+        if args.get(field) is not None:
+            row[field] = args[field]
+    doc.bom.append(row)
     return {'key': key, 'item': item}
 
 
@@ -342,7 +365,7 @@ def _cmd_edit_bom_row(doc, args):
     key = args.get('key')
     for row in doc.bom:
         if row.get('key') == key:
-            for field in ('qty', 'pn', 'desc', 'mat', 'shown', 'item'):
+            for field in ('qty', 'pn', 'desc', 'mat', 'shown', 'item') + ROW_LINKS:
                 if field in args:
                     row[field] = _qty(args[field]) if field == 'qty' else args[field]
             return {'key': key, 'item': row.get('item')}
@@ -415,6 +438,8 @@ def _take_rows(doc, rows, replace):
             'desc': rec.get('desc') or rec.get('description') or '',
             'mat': rec.get('mat') or rec.get('material') or '',
             'shown': rec.get('shown', True),
+            'thumbnail': rec.get('thumbnail'),
+            'component': rec.get('component'),
         })
         made.append(result)
     return {'count': len(made), 'rows': made}
@@ -440,6 +465,8 @@ def _cmd_load_components(doc, args):
             'desc': rec.get('description', rec.get('desc', '')),
             'mat': rec.get('material', rec.get('mat', '')),
             'shown': rec.get('shown', True),
+            'thumbnail': rec.get('thumbnail'),
+            'component': rec.get('component', rec.get('entity_token')),
         })
     return _take_rows(doc, rows, bool(args.get('replace', True)))
 
@@ -472,6 +499,10 @@ def _upsert(doc, sheet_id, kind, id_, fields, required):
 
 def _bom_fields(args, existing):
     fields = {}
+    if 'anchor' in args and args['anchor'] is not None:
+        if args['anchor'] not in BOM_ANCHORS:
+            raise ValueError('anchor must be one of %s' % ', '.join(BOM_ANCHORS))
+        fields['anchor'] = args['anchor']
     for key in ('x1', 'ytop', 'max_height', 'text_h'):
         if key in args and args[key] is not None:
             fields[key] = float(args[key])
@@ -480,9 +511,17 @@ def _bom_fields(args, existing):
     if 'max_height' in fields and fields['max_height'] <= 0:
         raise ValueError('max_height must be greater than 0')
     if existing is None:
-        for key in ('x1', 'ytop', 'max_height'):
-            if key not in fields:
-                raise ValueError('%s is required' % key)
+        if 'anchor' not in fields:
+            fields['anchor'] = 'free' if ('x1' in fields or 'ytop' in fields) else 'bottom_left'
+        if fields['anchor'] == 'free':
+            for key in ('x1', 'ytop', 'max_height'):
+                if key not in fields:
+                    raise ValueError('%s is required for a free table' % key)
+    elif fields.get('anchor') == 'free' or ('anchor' not in fields and ('x1' in fields or 'ytop' in fields)):
+        # Dragging a piece makes it free; keep its height limit.
+        fields['anchor'] = 'free'
+        if not existing.get('max_height') and 'max_height' not in fields:
+            raise ValueError('max_height is required when a table becomes free')
     return fields
 
 
@@ -491,7 +530,7 @@ def _cmd_place_bom(doc, args):
     sheet_id = args.get('sheet') or (existing_sheet.get('id') if existing_sheet else None)
     if not sheet_id:
         raise ValueError('sheet is required')
-    el = _upsert(doc, sheet_id, 'bom', args.get('id'), _bom_fields(args, existing), ('x1', 'ytop', 'max_height'))
+    el = _upsert(doc, sheet_id, 'bom', args.get('id'), _bom_fields(args, existing), ())
     layout = bom_layout(doc)
     segment = next(seg for seg in layout['segments'] if seg['id'] == el['id'])
     return {'id': el['id'], 'segment': segment, 'overflow': layout['overflow']}
@@ -648,6 +687,8 @@ def _cmd_place_view(doc, args):
         fields['letter'] = (str(args['letter']).strip().upper() or None) if args['letter'] is not None else None
     if 'show_label' in args and args['show_label'] is not None:
         fields['show_label'] = bool(args['show_label'])
+    if 'components' in args:
+        fields['components'] = list(args['components'] or [])
     el = _upsert(doc, sheet_id, 'view', args.get('id'), fields, ('x', 'y', 'w', 'h'))
     el.setdefault('kind', 'standard')
     owner, _el = find_element(doc, el['id'])
@@ -677,7 +718,7 @@ def _cmd_set_hole_tolerance(doc, args):
         doc.hole_tol = None
     else:
         doc.hole_tol = normalize_hole_tol(args, doc.hole_tol)
-    return {'hole_tol': doc.hole_tol, 'note': hole_note_text(doc.hole_tol)}
+    return {'hole_tol': doc.hole_tol, 'note': hole_note_text(doc.hole_tol, doc.properties)}
 
 
 def _owner_sheet(doc, args):
@@ -736,7 +777,7 @@ def _cmd_place_hole(doc, args):
     if existing is None and not (fields.get('dia') not in (None, '') or fields.get('thread')):
         raise ValueError('dia or thread is required')
     el = _upsert(doc, sheet_id, 'hole', args.get('id'), fields, ('x', 'y', 'ax', 'ay'))
-    return {'id': el['id'], 'lines': hole_callout_lines(el, doc.hole_tol)}
+    return {'id': el['id'], 'lines': hole_callout_lines(el, doc.hole_tol, doc.properties)}
 
 
 def _cmd_move_hole(doc, args):
@@ -747,6 +788,221 @@ def _cmd_move_hole(doc, args):
 
 def _cmd_delete_hole(doc, args):
     return _delete_element(doc, args.get('id'), 'hole')
+
+
+def _cmd_set_tiers(doc, args):
+    if args.get('clear'):
+        doc.properties['tol_tiers'] = None
+        doc.properties['tol_angle'] = None
+    else:
+        if args.get('tiers') is not None:
+            doc.properties['tol_tiers'] = normalize_tiers(args['tiers'])
+        if 'angle' in args:
+            a = args['angle']
+            if a not in (None, '') and float(a) <= 0:
+                raise ValueError('angle must be greater than 0')
+            doc.properties['tol_angle'] = None if a in (None, '') else float(a)
+    return {'tiers': block_tiers(doc.properties), 'text': block_text(doc.properties)}
+
+
+def _used_letters(doc, skip=None):
+    out = []
+    for sheet in doc.sheets:
+        for el in sheet.get('elements') or []:
+            if el.get('type') == 'view' and el.get('letter') and el.get('id') != skip:
+                out.append(el['letter'])
+    return out
+
+
+def _cmd_add_detail(doc, args):
+    existing_sheet, existing = find_element(doc, args.get('id')) if args.get('id') else (None, None)
+    if existing is not None and existing.get('type') != 'view':
+        raise ValueError('id %r is a %s, not a view' % (args.get('id'), existing.get('type')))
+    sheet_id = args.get('sheet') or (existing_sheet.get('id') if existing_sheet else None)
+    if not sheet_id:
+        raise ValueError('sheet is required')
+    parent = args.get('parent') or (existing or {}).get('parent')
+    _ps, pel = find_element(doc, parent)
+    if pel is None or pel.get('type') != 'view':
+        raise ValueError('parent must be a view id')
+    fields = _num_fields(args, ('x', 'y', 'w', 'h'))
+    fields['kind'] = 'detail'
+    fields['parent'] = parent
+    fields['detail'] = normalize_detail(args, (existing or {}).get('detail'))
+    letter = args.get('letter') or (existing or {}).get('letter')
+    used = _used_letters(doc, skip=args.get('id'))
+    if letter:
+        letter = str(letter).strip().upper()
+    else:
+        letter = next_letter(used)
+    fields['letter'] = letter
+    if 'label' in args:
+        fields['label'] = args['label']
+    el = _upsert(doc, sheet_id, 'view', args.get('id'), fields, ('x', 'y', 'w', 'h'))
+    owner, _el = find_element(doc, el['id'])
+    shown = resolved_view(doc, owner, el)
+    return {'id': el['id'], 'letter': letter, 'scale': shown.get('scale'),
+            'caption': caption_lines(shown, sheet_scale(doc, owner)), 'detail': el['detail']}
+
+
+def _view_scales(doc):
+    out = {}
+    for sheet in doc.sheets:
+        for el in sheet.get('elements') or []:
+            if el.get('type') == 'view':
+                shown = resolved_view(doc, sheet, el)
+                out[el['id']] = scale_value(shown.get('scale') or sheet_scale(doc, sheet)) or 1.0
+    return out
+
+
+def _store_suggestions(doc, found):
+    added = []
+    for sug in found:
+        key = (sug.get('view'), tuple(sug.get('features') or []), sug.get('reason'))
+        if any((o.get('view'), tuple(o.get('features') or []), o.get('reason')) == key for o in doc.suggestions):
+            continue
+        sug = dict(sug)
+        sug['id'] = sug.get('id') or alloc_id(doc, 'sug')
+        _observe(doc, sug['id'])
+        sug.setdefault('status', 'open')
+        doc.suggestions.append(sug)
+        added.append(sug)
+    return added
+
+
+def _cmd_suggest_details(doc, args):
+    found = find_candidates(
+        args.get('features') or [], _view_scales(doc),
+        small_mm=float(args.get('small_mm') or SMALL_MM), cluster_mm=float(args.get('cluster_mm') or CLUSTER_MM),
+        min_cluster=int(args.get('min_cluster') or MIN_CLUSTER))
+    added = _store_suggestions(doc, found)
+    return {'added': added, 'status_bar': status_bar(doc.suggestions)}
+
+
+def _cmd_add_suggestion(doc, args):
+    sug = {k: args.get(k) for k in ('id', 'kind', 'reason', 'view', 'features', 'cx', 'cy', 'r', 'scale', 'text')
+           if args.get(k) is not None}
+    sug.setdefault('kind', 'detail_view')
+    sug.setdefault('reason', 'ai')
+    if not sug.get('text'):
+        raise ValueError('text is required (what the engineer should look at)')
+    added = _store_suggestions(doc, [sug])
+    return {'added': added, 'status_bar': status_bar(doc.suggestions)}
+
+
+def _cmd_list_suggestions(doc, args):
+    return {'suggestions': [dict(s) for s in doc.suggestions]}
+
+
+def _cmd_status_bar(doc, args):
+    return status_bar(doc.suggestions)
+
+
+def _find_suggestion(doc, sid):
+    for sug in doc.suggestions:
+        if sug.get('id') == sid:
+            return sug
+    raise ValueError('no suggestion %r' % sid)
+
+
+def _cmd_accept_suggestion(doc, args):
+    sug = _find_suggestion(doc, args.get('id'))
+    if sug.get('status') != 'open':
+        raise ValueError('suggestion %s is %s' % (sug['id'], sug.get('status')))
+    if sug.get('kind') != 'detail_view' or not sug.get('view') or sug.get('r') is None:
+        raise ValueError('only a detail-view suggestion with a circle can be accepted here')
+    detail_args = {
+        'id': args.get('view_id'), 'sheet': args.get('sheet'), 'parent': sug['view'],
+        'x': args.get('x'), 'y': args.get('y'), 'w': args.get('w'), 'h': args.get('h'),
+        'cx': sug['cx'], 'cy': sug['cy'], 'r': sug['r'],
+        'scale_mode': 'custom', 'scale': args.get('scale') or sug.get('scale'),
+        'letter': args.get('letter'), 'style': args.get('style'), 'outline': args.get('outline'),
+    }
+    result = _cmd_add_detail(doc, {k: v for k, v in detail_args.items() if v is not None})
+    sug['status'] = 'accepted'
+    sug['detail_view'] = result['id']
+    return {'suggestion': sug['id'], 'view': result, 'status_bar': status_bar(doc.suggestions)}
+
+
+def _cmd_dismiss_suggestion(doc, args):
+    sug = _find_suggestion(doc, args.get('id'))
+    sug['status'] = 'dismissed'
+    return {'suggestion': sug['id'], 'status_bar': status_bar(doc.suggestions)}
+
+
+def _cmd_split_table(doc, args):
+    key = args.get('row')
+    where = args.get('where') or 'below'
+    if where not in ('above', 'below'):
+        raise ValueError("where must be 'above' or 'below'")
+    keys = [r.get('key') for r in doc.bom]
+    if key not in keys:
+        raise ValueError('no BOM row %r' % key)
+    layout = bom_layout(doc)
+    seg = next((s for s in layout['segments'] if key in s['rows']), None)
+    if seg is None:
+        raise ValueError('row %r is not drawn in any table piece' % key)
+    i = seg['rows'].index(key)
+    first_new = i if where == 'above' else i + 1
+    if first_new <= 0 or first_new >= len(seg['rows']):
+        raise ValueError('nothing to split: the piece would be empty')
+    start_key = seg['rows'][first_new]
+    _osheet, source = find_element(doc, seg['id'])
+    sheet_id = args.get('sheet') or seg['sheet']
+    _i, sheet = sheet_by_id(doc, sheet_id)
+    new_id = args.get('id') or alloc_id(doc, 'bom')
+    _observe(doc, new_id)
+    piece = {'id': new_id, 'type': 'bom', 'start_key': start_key}
+    for k in ('text_h', 'colw'):
+        if source.get(k) is not None:
+            piece[k] = source[k]
+    anchor = args.get('anchor') or 'above_title'
+    if anchor not in BOM_ANCHORS:
+        raise ValueError('anchor must be one of %s' % ', '.join(BOM_ANCHORS))
+    piece['anchor'] = anchor
+    for k in ('x1', 'ytop', 'max_height'):
+        if args.get(k) is not None:
+            piece[k] = float(args[k])
+    if anchor == 'free' and not all(k in piece for k in ('x1', 'ytop', 'max_height')):
+        raise ValueError('a free piece needs x1, ytop and max_height')
+    elements = sheet['elements']
+    if source in elements:
+        elements.insert(elements.index(source) + 1, piece)
+    else:
+        elements.append(piece)
+    layout = bom_layout(doc)
+    return {'id': new_id, 'start_key': start_key, 'segments': layout['segments'], 'overflow': layout['overflow']}
+
+
+def _cmd_merge_tables(doc, args):
+    owner, el = find_element(doc, args.get('id'))
+    if el is None or el.get('type') != 'bom':
+        raise ValueError('no BOM piece %r' % args.get('id'))
+    regions = [e for _s, e in bom_regions(doc)]
+    if regions.index(el) == 0:
+        raise ValueError('the first piece has nothing to merge into')
+    owner['elements'].remove(el)
+    layout = bom_layout(doc)
+    return {'removed': el['id'], 'segments': layout['segments'], 'overflow': layout['overflow']}
+
+
+def _cmd_select_row(doc, args):
+    key = args.get('key')
+    row = next((r for r in doc.bom if r.get('key') == key), None)
+    if row is None:
+        raise ValueError('no BOM row %r' % key)
+    highlight = []
+    for sheet in doc.sheets:
+        for el in sheet.get('elements') or []:
+            if el.get('type') == 'balloon' and el.get('bom_key') == key:
+                highlight.append({'sheet': sheet['id'], 'element': el['id'], 'type': 'balloon'})
+            elif el.get('type') == 'view':
+                comps = el.get('components') or []
+                if key in comps or (row.get('component') and row['component'] in comps):
+                    highlight.append({'sheet': sheet['id'], 'element': el['id'], 'type': 'view'})
+    piece = next((s['id'] for s in bom_layout(doc)['segments'] if key in s['rows']), None)
+    return {'key': key, 'item': row.get('item'), 'pn': row.get('pn') or '', 'table_piece': piece,
+            'thumbnail': row.get('thumbnail'), 'component': row.get('component'), 'highlight': highlight}
 
 
 def _cmd_marks(doc, args):
@@ -845,6 +1101,17 @@ COMMANDS = {
     'move_view': _cmd_move_view,
     'delete_view': _cmd_delete_view,
     'view_caption': _cmd_view_caption,
+    'add_detail_view': _cmd_add_detail,
+    'suggest_details': _cmd_suggest_details,
+    'add_suggestion': _cmd_add_suggestion,
+    'list_suggestions': _cmd_list_suggestions,
+    'status_bar': _cmd_status_bar,
+    'accept_suggestion': _cmd_accept_suggestion,
+    'dismiss_suggestion': _cmd_dismiss_suggestion,
+    'set_tolerance_tiers': _cmd_set_tiers,
+    'split_table': _cmd_split_table,
+    'merge_tables': _cmd_merge_tables,
+    'select_bom_row': _cmd_select_row,
     'set_hole_tolerance': _cmd_set_hole_tolerance,
     'place_dimension': _cmd_place_dimension,
     'move_dimension': _cmd_move_dimension,
@@ -906,6 +1173,17 @@ place_view = _bind('place_view')
 move_view = _bind('move_view')
 delete_view = _bind('delete_view')
 view_caption = _bind('view_caption')
+add_detail_view = _bind('add_detail_view')
+suggest_details = _bind('suggest_details')
+add_suggestion = _bind('add_suggestion')
+list_suggestions = _bind('list_suggestions')
+status_bar_info = _bind('status_bar')
+accept_suggestion = _bind('accept_suggestion')
+dismiss_suggestion = _bind('dismiss_suggestion')
+set_tolerance_tiers = _bind('set_tolerance_tiers')
+split_table = _bind('split_table')
+merge_tables = _bind('merge_tables')
+select_bom_row = _bind('select_bom_row')
 set_hole_tolerance = _bind('set_hole_tolerance')
 place_dimension = _bind('place_dimension')
 move_dimension = _bind('move_dimension')

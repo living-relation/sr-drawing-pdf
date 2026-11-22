@@ -37,7 +37,7 @@ def test_add_remove_reorder_sheets_and_size():
     doc, info = _go(doc, 'add_sheet', id='wide', size='C')
     assert info['size'] == 'C'
     block = execute(doc, 'title_block', {'sheet': 'wide'})['result']
-    assert block['size'] == 'C (test)'
+    assert block['size'] == 'C' and block['size_label'] == 'C (test)'
 
 
 def test_title_fields_bind_across_sheets():
@@ -54,7 +54,7 @@ def test_title_fields_bind_across_sheets():
     assert a['title'] == b['title'] == 'BRACKET'
     assert a['sheet'] == '1 OF 2' and b['sheet'] == '2 OF 2'
     assert a['scale'] == '1:2' and b['scale'] == 'AS SHOWN'
-    assert a['size'] == 'B (11x17)'
+    assert a['size'] == 'B' and a['size_label'] == 'B (11x17)'
     doc, _info = _go(doc, 'reorder_sheets', order=['s2', 's1'])
     assert execute(doc, 'title_block', {'sheet': 's1'})['result']['sheet'] == '2 OF 2'
     doc, _info = _go(doc, 'set_title', field='project', value='BETA')
@@ -192,13 +192,14 @@ def test_frame_has_zones_title_and_draft_mark():
     info = {
         'project': 'ALPHA', 'title': 'BRACKET', 'pn': 'N-1', 'rev': 'C',
         'material': 'SEE BOM', 'scale': '1:2', 'units': 'mm', 'date': '2026-11-19',
-        'drawn': 'DG', 'source': 'part.step', 'size_label': 'B (11x17)',
+        'drawn': 'DG', 'source': 'part.step', 'size_label': 'B (11x17)', 'size': 'B',
         'revlog': [], 'draft': 3,
     }
     D.draw_frame(sh, info, 1, 2)
     texts = [it[3] for it in sh.items if it[0] == 'tx']
     assert 'ALPHA' in texts and 'BRACKET' in texts and '3RD ANGLE' in texts
-    assert '1 OF 2' in texts and 'B (11x17)' in texts and 'DRAFT 3, NOT RELEASED' in texts
+    assert '1 OF 2' in texts and 'B' in texts and 'DRAFT 3, NOT RELEASED' in texts
+    assert 'B (11x17)' not in texts and 'BLOCK TOLERANCE' in texts
     assert '8' in texts and 'D' in texts and 'REVISIONS' in texts
     assert any(it[0] == 'wm' for it in sh.items)
     border = [it for it in sh.items if it[0] == 'pl' and it[2] == 'border'][0]
@@ -253,7 +254,8 @@ def test_sample_pdf_is_two_size_b_sheets(tmp_path):
     layout = execute(doc, 'layout_bom', {})['result']
     assert layout['overflow'] == []
     assert layout['segments'][0]['rows'] and layout['segments'][1]['continued']
-    assert layout['segments'][1]['sheet'] == 's2'
+    assert layout['segments'][1]['sheet'] == 's1'
+    assert [s['anchor'] for s in layout['segments']] == ['bottom_left', 'above_title']
     path = str(tmp_path / 'sample.pdf')
     result = execute(doc, 'export_pdf', {'path': path})['result']
     assert result['pages'] == 2

@@ -10,3 +10,6 @@
 - Live Fusion tests: never touch other people's open documents.
   The smoke test closes its own design without saving.
 - This is the only agent rules file in the repo. Do not add a CLAUDE.md or any other agent file; put rules here.
+- Drawing items: when you add one, offer the options the SOLIDWORKS drawing editor offers for it
+  (PropertyManager or table menu) and cite the SOLIDWORKS help page. Never add a detail view
+  automatically; only suggest one.

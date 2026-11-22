@@ -3,6 +3,7 @@ import copy
 
 from .canvas import (
     BOM_COLS,
+    BOM_COLS_COMPACT,
     PW,
     PH,
     BOM_TEXT_MM,
@@ -47,6 +48,8 @@ _EMPTY_PROPS = {
     'drawn': '',
     'source': '',
     'tol': None,
+    'tol_tiers': None,
+    'tol_angle': None,
 }
 
 
@@ -73,6 +76,7 @@ class DrawingDocument(object):
         self.sheets = []
         self.sizes = {}
         self.hole_tol = None
+        self.suggestions = []
 
     def to_dict(self):
         return {
@@ -86,6 +90,7 @@ class DrawingDocument(object):
             'sheets': copy.deepcopy(self.sheets),
             'sizes': copy.deepcopy(self.sizes),
             'hole_tol': copy.deepcopy(self.hole_tol),
+            'suggestions': copy.deepcopy(self.suggestions),
         }
 
     @classmethod
@@ -112,6 +117,9 @@ class DrawingDocument(object):
         doc.sheets = list(data.get('sheets') or [])
         doc.sizes = dict(data.get('sizes') or {})
         doc.hole_tol = data.get('hole_tol') or None
+        doc.suggestions = list(data.get('suggestions') or [])
+        for sug in doc.suggestions:
+            _observe(doc, sug.get('id'))
         for sheet in doc.sheets:
             _observe(doc, sheet.get('id'))
             for el in sheet.get('elements') or []:
@@ -185,6 +193,21 @@ def sheet_scale(doc, sheet):
     return sheet.get('scale') or doc.properties.get('scale') or ''
 
 
+def resolved_view(doc, sheet, el):
+    """A view with its scale filled in. A detail view's scale comes from its scale_mode."""
+    if el.get('kind') != 'detail' or not el.get('detail'):
+        return el
+    from .detail import resolve_scale
+    out = dict(el)
+    parent_scale = None
+    if el.get('parent'):
+        psheet, parent = find_element(doc, el['parent'])
+        if parent is not None:
+            parent_scale = parent.get('scale') or sheet_scale(doc, psheet)
+    out['scale'] = resolve_scale(el['detail'], parent_scale, sheet_scale(doc, sheet))
+    return out
+
+
 def notes_with_auto(doc):
     """User notes, then the hole tolerance note when the drawing has one.
 
@@ -192,7 +215,7 @@ def notes_with_auto(doc):
     """
     from .annotate import hole_note_text
     notes = list(doc.notes)
-    text = hole_note_text(doc.hole_tol)
+    text = hole_note_text(doc.hole_tol, doc.properties)
     if text:
         notes.append({'key': '_hole_tol', 'text': text})
     return notes
@@ -213,6 +236,10 @@ def resolved_title(doc, sheet, sheet_no, n_sheets):
         info['drawn'] = drawn_by(doc.revlog) or ''
     spec = size_of(doc, sheet.get('size') or 'B')
     info['size_label'] = spec.get('label') or sheet.get('size') or 'B'
+    info['size'] = sheet.get('size') or 'B'
+    if not info.get('tol'):
+        from .annotate import block_text
+        info['tol'] = block_text(doc.properties)
     info['draft'] = doc.draft
     info['revlog'] = table_rows(doc.revlog, REVLOG_MAX_ROWS) if sheet_no == 1 else None
     info['sheet_no'] = sheet_no
@@ -220,54 +247,117 @@ def resolved_title(doc, sheet, sheet_no, n_sheets):
     return info
 
 
-def layout_bom(doc):
-    """Split BOM rows across placed regions, in sheet order then element order.
+BOM_ANCHORS = ('bottom_left', 'above_title', 'free')
+FRAME_MARGIN = 10.0
+TITLE_W = 178.0
+TITLE_H = 52.0
 
-    A later region is a continuation table. Rows that still do not fit are
-    listed in overflow (they are not drawn).
-    """
+
+def bom_anchor(el):
+    """A region's anchor. Old regions with x1/ytop and no anchor are free."""
+    return el.get('anchor') or 'free'
+
+
+def _sheet_wh(doc, sheet):
+    spec = size_of(doc, sheet.get('size') or 'B')
+    return float(spec['width']), float(spec['height'])
+
+
+def _capacity(doc, sheet, el):
+    """Height a region may use: its max_height, else the room its anchor leaves."""
+    max_h = float(el.get('max_height') or 0)
+    if max_h > 0:
+        return max_h
+    anchor = bom_anchor(el)
+    _w, height = _sheet_wh(doc, sheet)
+    if anchor == 'bottom_left':
+        return height - 2 * FRAME_MARGIN
+    if anchor == 'above_title':
+        return height - 2 * FRAME_MARGIN - TITLE_H - (7.0 if doc.draft else 0.0)
+    return 0.0
+
+
+def _place(doc, sheet, el, colw, used):
+    """Right edge x1 and top y of a region holding `used` mm of table."""
+    anchor = bom_anchor(el)
+    width, _h = _sheet_wh(doc, sheet)
+    if anchor == 'bottom_left':
+        return FRAME_MARGIN + sum(colw), FRAME_MARGIN + used
+    if anchor == 'above_title':
+        base = FRAME_MARGIN + TITLE_H + (7.0 if doc.draft else 0.0)
+        return width - FRAME_MARGIN, base + used
+    return float(el.get('x1') or 0), float(el.get('ytop') or 0)
+
+
+def bom_regions(doc):
     regions = []
     for sheet in doc.sheets:
         for el in sheet.get('elements') or []:
             if el.get('type') == 'bom':
                 regions.append((sheet, el))
+    return regions
+
+
+def layout_bom(doc):
+    """Split BOM rows across placed regions (table pieces), in sheet order then element order.
+
+    A later region is a continuation table with its own header. A region made
+    by split_table carries start_key: it starts at that row, and the region
+    before it stops there. Rows that do not fit are listed in overflow (not drawn).
+    """
+    regions = bom_regions(doc)
     segments = []
     idx = 0
     rows = doc.bom
+    index_of = {r.get('key'): i for i, r in enumerate(rows)}
+    starts = [index_of.get(el.get('start_key')) if el.get('start_key') else None for _s, el in regions]
     first = regions[0][1] if regions else None
-    for sheet, el in regions:
+    skipped = []
+    for n, (sheet, el) in enumerate(regions):
+        start = starts[n]
+        if start is not None and start > idx:
+            skipped.extend(r.get('key') for r in rows[idx:start])
+            idx = start
+        stop = len(rows)
+        bounded = False
+        for later in starts[n + 1:]:
+            if later is not None and later > idx:
+                stop = later
+                bounded = True
+                break
         continued = any(seg['rows'] for seg in segments)
         h = _bom_text_h(el, first, continued)
         colw = _bom_colw(el, first, continued)
-        max_h = float(el.get('max_height') or 0)
-        if max_h <= 0:
-            segments.append({
-                'id': el.get('id'),
-                'sheet': sheet.get('id'),
-                'continued': continued,
-                'rows': [],
-                'bottom': round(float(el.get('ytop') or 0), 4),
-            })
-            continue
-        header = bom_header_height(h, continued)
-        used = header
+        cap = _capacity(doc, sheet, el)
         taken = []
-        while idx < len(rows):
-            hh, _wrapped = bom_row_height(bom_row_cells(rows[idx]), colw, h)
-            if taken and used + hh > max_h + 1e-6:
-                break
-            taken.append(rows[idx].get('key'))
-            used += hh
-            idx += 1
-        bottom = float(el.get('ytop') or 0) - (used if taken else 0)
+        used = 0.0
+        if cap > 0:
+            used = bom_header_height(h, continued)
+            while idx < stop:
+                hh, _wrapped = bom_row_height(bom_row_cells(rows[idx]), colw, h)
+                if taken and used + hh > cap + 1e-6:
+                    break
+                taken.append(rows[idx].get('key'))
+                used += hh
+                idx += 1
+            if not taken:
+                used = 0.0
+            if bounded and idx < stop:
+                skipped.extend(r.get('key') for r in rows[idx:stop])
+                idx = stop
+        x1, top = _place(doc, sheet, el, colw, used)
         segments.append({
             'id': el.get('id'),
             'sheet': sheet.get('id'),
             'continued': continued,
+            'anchor': bom_anchor(el),
             'rows': taken,
-            'bottom': round(bottom, 4),
+            'x1': round(x1, 4),
+            'ytop': round(top, 4),
+            'bottom': round(top - used, 4),
         })
-    return {'segments': segments, 'overflow': [r.get('key') for r in rows[idx:]]}
+    overflow = skipped + [r.get('key') for r in rows[idx:]]
+    return {'segments': segments, 'overflow': overflow}
 
 
 def _bom_text_h(el, first, continued):
@@ -283,6 +373,9 @@ def _bom_colw(el, first, continued):
     colw = el.get('colw')
     if not colw and continued and first is not None and first.get('colw'):
         colw = first.get('colw')
+    if not colw and bom_anchor(el) == 'bottom_left':
+        # Narrow enough to sit left of the block tolerance box on size B.
+        colw = BOM_COLS_COMPACT
     return tuple(float(c) for c in (colw or BOM_COLS))
 
 
@@ -303,26 +396,24 @@ def _bom_warnings(doc, warnings):
         for el in sheet.get('elements') or []:
             if el.get('type') == 'bom' and first is None:
                 first = el
-    seen_first = False
+    layout = layout_bom(doc)
+    seg_by_id = {seg['id']: seg for seg in layout['segments']}
     for index, sheet in enumerate(doc.sheets):
-        spec = size_of(doc, sheet.get('size') or 'B')
-        width, height = float(spec['width']), float(spec['height'])
-        margin = 10.0
-        title = (width - margin - 178, margin, width - margin, margin + 52)
+        width, height = _sheet_wh(doc, sheet)
+        margin = FRAME_MARGIN
+        title = (width - margin - TITLE_W - 92.0, margin, width - margin, margin + TITLE_H)
         rev = revlog_rect(rows, x1=width - margin, y1=height - margin) if index == 0 else None
         for el in sheet.get('elements') or []:
             if el.get('type') != 'bom':
                 continue
-            continued = seen_first
-            seen_first = True
-            colw = _bom_colw(el, first, continued)
-            x1 = float(el.get('x1') or 0)
-            top = float(el.get('ytop') or 0)
-            max_h = float(el.get('max_height') or 0)
-            if max_h <= 0:
+            seg = seg_by_id.get(el.get('id'))
+            if bom_anchor(el) == 'free' and float(el.get('max_height') or 0) <= 0:
                 warnings.append('BOM region %s has no height' % el.get('id'))
                 continue
-            box = (x1 - sum(colw), top - max_h, x1, top)
+            if not seg or not seg['rows']:
+                continue
+            colw = _bom_colw(el, first, seg['continued'])
+            box = (seg['x1'] - sum(colw), seg['bottom'], seg['x1'], seg['ytop'])
             if box[0] < -0.01 or box[1] < -0.01 or box[2] > width + 0.01 or box[3] > height + 0.01:
                 warnings.append('BOM region %s runs off the sheet' % el.get('id'))
             if _overlap(box, title):
@@ -343,7 +434,8 @@ def document_warnings(doc):
     if layout['overflow']:
         warnings.append('BOM rows do not fit: %s' % ', '.join(str(k) for k in layout['overflow']))
     _bom_warnings(doc, warnings)
-    n_tol = len(tol_lines(doc.properties.get('tol')))
+    from .annotate import block_text
+    n_tol = len(tol_lines(doc.properties.get('tol') or block_text(doc.properties)))
     if n_tol > tol_max_lines():
         warnings.append('tolerance text needs %d lines; the block fits %d' % (n_tol, tol_max_lines()))
     keys = {r.get('key') for r in doc.bom}
@@ -362,15 +454,12 @@ def _annotation_warnings(doc, warnings):
     from .annotate import hole_note_text, is_default_name, same_scale, scale_value
     letters = {}
     has_notes_block = False
-    holes = 0
     for sheet in doc.sheets:
         sc = sheet_scale(doc, sheet)
         for el in sheet.get('elements') or []:
             kind = el.get('type')
             if kind == 'notes':
                 has_notes_block = True
-            elif kind == 'hole':
-                holes += 1
             elif kind == 'view':
                 vk = el.get('kind') or 'standard'
                 if vk in ('detail', 'section'):
@@ -385,10 +474,17 @@ def _annotation_warnings(doc, warnings):
                         and same_scale(el.get('scale'), sc):
                     warnings.append('view %s is a default view at the sheet scale; it normally has no label'
                                     % el.get('id'))
-            elif kind == 'dim' and el.get('role') == 'hole_position' and not el.get('tol') \
-                    and not (doc.hole_tol or {}).get('position'):
-                warnings.append('hole position dimension %s has no tolerance; the general tolerance applies'
-                                % el.get('id'))
+                if vk == 'detail' and el.get('detail'):
+                    _ps, parent = find_element(doc, el.get('parent'))
+                    if parent is None or parent.get('type') != 'view':
+                        warnings.append('detail view %s has no parent view' % el.get('id'))
+            elif kind == 'dim' and el.get('tol'):
+                from .render import dimension_text
+                tol = el['tol']
+                bare = dimension_text(doc, sheet, dict(el, tol=None, role=None))
+                if tol.get('kind') in ('pm', 'dev') and dimension_text(doc, sheet, el) == bare:
+                    warnings.append('dimension %s tolerance matches the block tolerance and does not print'
+                                    % el.get('id'))
         if not sc:
             for el in sheet.get('elements') or []:
                 if el.get('type') == 'view':
@@ -397,7 +493,7 @@ def _annotation_warnings(doc, warnings):
     for letter, ids in letters.items():
         if len(ids) > 1:
             warnings.append('view letter %s is used more than once (%s)' % (letter, ', '.join(ids)))
-    if holes and not doc.hole_tol:
-        warnings.append('hole callouts use the general tolerance; set_hole_tolerance sets one for all holes')
-    if hole_note_text(doc.hole_tol) and not has_notes_block:
+    if doc.properties.get('tol') and doc.properties.get('tol_tiers'):
+        warnings.append('the custom tol text replaces the tolerance tiers in the title block')
+    if hole_note_text(doc.hole_tol, doc.properties) and not has_notes_block:
         warnings.append('the hole tolerance note has no notes block to print in')

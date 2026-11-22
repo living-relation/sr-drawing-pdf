@@ -168,27 +168,42 @@ def test_dimension_uses_its_view_scale():
     assert res['text'] == '10'
 
 
-def test_hole_tolerance_applies_to_every_hole_and_position_dimension():
+def test_hole_tolerance_prints_only_where_it_differs_from_the_block():
     doc = _base()
     doc, res = _go(doc, 'set_hole_tolerance', size={'kind': 'dev', 'plus': 0.1, 'minus': 0},
                    position={'kind': 'pm', 'value': 0.05})
     assert res['hole_tol']['show'] == 'note'
-    assert res['note'] == 'ALL HOLES UNLESS OTHERWISE SPECIFIED: HOLE SIZE +0.1/-0, HOLE POSITION \u00b10.05.'
+    # Size differs from the block; position ±0.05 is the X.XX block value, so it does not print.
+    assert res['note'] == 'ALL HOLES UNLESS OTHERWISE SPECIFIED: HOLE SIZE +0.1/-0.'
     doc, res = _go(doc, 'place_hole_callout', id='h1', sheet='s1', count=4, dia=6.6, depth='THRU',
                    x=50, y=60, ax=40, ay=50)
     assert res['lines'] == ['4X \u23006.6 THRU']
     doc, res = _go(doc, 'set_hole_tolerance', show='callout')
     assert res['note'] == ''
     doc, res = _go(doc, 'move_hole_callout', id='h1')
-    assert res['lines'] == ['4X \u23006.6 +0.1/-0 THRU', 'POSITION \u00b10.05']
+    assert res['lines'] == ['4X \u23006.6 +0.1/-0 THRU']
+    doc, res = _go(doc, 'set_hole_tolerance', position={'kind': 'pm', 'value': 0.02})
+    doc, res = _go(doc, 'move_hole_callout', id='h1')
+    assert res['lines'] == ['4X \u23006.6 +0.1/-0 THRU', 'POSITION \u00b10.02']
     doc, res = _go(doc, 'place_hole_callout', id='h2', sheet='s1', dia=3, tol={'kind': 'pm', 'value': 0.02},
                    x=50, y=60, ax=40, ay=50)
     assert res['lines'][0] == '\u23003 \u00b10.02'
     doc, res = _go(doc, 'place_dimension', id='p', sheet='s1', x1=20, y1=50, x2=70, y2=50, orient='h',
                    role='hole_position', decimals=2)
-    assert res['text'] == '100.00 \u00b10.05'
+    assert res['text'] == '100.00 \u00b10.02'
+    doc, res = _go(doc, 'set_hole_tolerance', position={'kind': 'pm', 'value': 0.05})
+    doc, res = _go(doc, 'move_dimension', id='p')
+    assert res['text'] == '100.00'
     doc, res = _go(doc, 'move_dimension', id='p', tol={'kind': 'pm', 'value': 0.2})
     assert res['text'] == '100.00 \u00b10.20'
+
+
+def test_hole_size_matching_block_prints_nothing():
+    doc = _base()
+    doc, res = _go(doc, 'set_hole_tolerance', size={'kind': 'pm', 'value': 0.2}, show='both')
+    assert res['note'] == ''
+    doc, res = _go(doc, 'place_hole_callout', id='h', sheet='s1', dia=6.6, x=50, y=60, ax=40, ay=50)
+    assert res['lines'] == ['\u23006.6']
 
 
 def test_tapped_hole_callout_has_tap_drill_and_thread():
@@ -203,23 +218,23 @@ def test_tapped_hole_callout_has_tap_drill_and_thread():
 def test_hole_note_prints_last_in_the_notes_block():
     doc = _base()
     doc, _r = _go(doc, 'add_note', key='n1', text='FIRST NOTE')
-    doc, _r = _go(doc, 'set_hole_tolerance', position={'kind': 'pm', 'value': 0.05})
+    doc, _r = _go(doc, 'set_hole_tolerance', position={'kind': 'pm', 'value': 0.02})
     warnings = execute(doc, 'check', {})['result']['warnings']
     assert any('no notes block' in w for w in warnings)
     doc, _r = _go(doc, 'place_notes', id='nb', sheet='s1', x=20, y=90)
     texts = ' '.join(_texts(doc)[0])
-    assert '2.' in texts and 'HOLE POSITION \u00b10.05' in texts
+    assert '2.' in texts and 'HOLE POSITION \u00b10.02' in texts
     doc, _r = _go(doc, 'set_hole_tolerance', clear=True)
     assert 'HOLE POSITION' not in ' '.join(_texts(doc)[0])
 
 
-def test_hole_warnings():
+def test_redundant_dimension_tolerance_warns():
     doc = _base()
-    doc, _r = _go(doc, 'place_hole_callout', id='h', sheet='s1', dia=5, x=50, y=60, ax=40, ay=50)
-    doc, _r = _go(doc, 'place_dimension', id='p', sheet='s1', x1=20, y1=50, x2=70, y2=50, role='hole_position')
+    doc, res = _go(doc, 'place_dimension', id='d', sheet='s1', x1=20, y1=50, x2=70, y2=50, orient='h',
+                   decimals=1, tol={'kind': 'pm', 'value': 0.2})
+    assert res['text'] == '100.0'
     warnings = execute(doc, 'check', {})['result']['warnings']
-    assert any('set_hole_tolerance' in w for w in warnings)
-    assert any('hole position dimension p' in w for w in warnings)
+    assert any('dimension d tolerance matches the block' in w for w in warnings)
 
 
 def test_dimension_arrows_and_rotated_text():
@@ -233,9 +248,13 @@ def test_dimension_arrows_and_rotated_text():
 def test_sample_follows_the_rules(tmp_path):
     doc = build_sample()
     caps = {v: execute(doc, 'view_caption', {'id': v})['result']['caption']
-            for v in ('v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8')}
+            for v in ('v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v8')}
     assert caps['v1'] == caps['v2'] == caps['v3'] == caps['v4'] == []
-    assert caps['v6'] == ['SECTION A-A'] and caps['v7'] == ['DETAIL B', 'SCALE 2:1']
+    assert caps['v6'] == ['SECTION A-A']
+    kinds = [el.get('kind') for sh in doc['sheets'] for el in sh['elements'] if el['type'] == 'view']
+    assert 'detail' not in kinds
+    bar = execute(doc, 'status_bar', {})['result']
+    assert bar['indicator'] == {'symbol': '!', 'color': 'yellow'} and bar['open'] == 2
     assert caps['v5'] == ['BUILD VIEW'] and caps['v8'] == ['SCALE 1:1']
     result = execute(doc, 'export_pdf', {'path': str(tmp_path / 's.pdf')})['result']
     assert result['warnings'] == []

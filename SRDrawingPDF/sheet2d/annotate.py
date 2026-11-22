@@ -10,11 +10,17 @@ Rules (Daniel, Nov 22 2026):
   the user asks for one (show_label).
 - Detail and section views keep their letter labels. Their scale shows only
   when it differs from the sheet scale.
-- Every user-added dimension can carry its own tolerance. With none, the
-  title-block general tolerance applies and the dimension shows the value only.
+- Detail views are never added by the engine. It may only suggest one
+  (see suggest.py); the engineer decides.
+- The block (title-block) tolerance is set by the number of decimals on a
+  dimension: X / X.X / X.XX in mm, .X / .XX / .XXX in inches. The tiers are
+  configurable and print in their own box in the title block.
+- A dimension that follows the block tolerance prints no tolerance text.
+  A tolerance set on one annotation prints only when it differs from the
+  block tolerance for that dimension's decimals.
 - One hole tolerance (size and position) can be set for the whole file. It
-  applies to every hole and is called out in a hole note, in each hole callout,
-  or both, as the engineer chooses.
+  prints (in a hole note, in each hole callout, or both) only where it
+  differs from the block tolerance. Hole callouts always carry thread specs.
 """
 import math
 
@@ -28,6 +34,102 @@ DEFAULT_VIEW_NAMES = frozenset((
 
 TOL_KINDS = ('pm', 'dev', 'limits', 'basic', 'ref')
 HOLE_TOL_SHOW = ('note', 'callout', 'both')
+
+
+DEFAULT_TIERS = {
+    'mm': [{'decimals': 0, 'value': 0.5}, {'decimals': 1, 'value': 0.2}, {'decimals': 2, 'value': 0.05}],
+    'in': [{'decimals': 1, 'value': 0.1}, {'decimals': 2, 'value': 0.01}, {'decimals': 3, 'value': 0.005}],
+}
+DEFAULT_ANGLE_TOL = 0.5
+
+
+def units_key(units):
+    u = str(units or 'mm').strip().lower()
+    return 'in' if u in ('in', 'inch', 'inches', '"') else 'mm'
+
+
+def normalize_tiers(tiers):
+    """[{'decimals': n, 'value': v}, ...] sorted by decimals. Each decimals once, value > 0."""
+    out = {}
+    for t in tiers or []:
+        d = int(t['decimals'])
+        v = float(t['value'])
+        if d < 0 or d > 6:
+            raise ValueError('tier decimals must be 0 to 6')
+        if v <= 0:
+            raise ValueError('tier tolerance must be greater than 0')
+        if d in out:
+            raise ValueError('decimals %d is listed twice' % d)
+        out[d] = v
+    if not out:
+        raise ValueError('give at least one tier')
+    return [{'decimals': d, 'value': out[d]} for d in sorted(out)]
+
+
+def block_tiers(props):
+    """The tiers in force for a drawing: its own, else the defaults for its units."""
+    tiers = props.get('tol_tiers')
+    if tiers:
+        return normalize_tiers(tiers)
+    return [dict(t) for t in DEFAULT_TIERS[units_key(props.get('units'))]]
+
+
+def block_value(props, decimals):
+    """The block ± tolerance for a dimension shown with `decimals` digits, or None."""
+    for t in block_tiers(props):
+        if t['decimals'] == decimals:
+            return t['value']
+    return None
+
+
+def _tier_pattern(decimals, inch):
+    if inch:
+        return '.' + 'X' * decimals if decimals else 'X'
+    return 'X' + ('.' + 'X' * decimals if decimals else '')
+
+
+def fmt_tol_value(v, inch):
+    s = ('%.6f' % v).rstrip('0').rstrip('.')
+    if inch and s.startswith('0.'):
+        s = s[1:]
+    return s
+
+
+def block_text(props):
+    """The text of the tolerance box in the title block, built from the tiers."""
+    inch = units_key(props.get('units')) == 'in'
+    tiers = block_tiers(props)
+    parts = ['%s \u00b1%s' % (_tier_pattern(t['decimals'], inch), fmt_tol_value(t['value'], inch)) for t in tiers]
+    lines = ['DIMENSIONS ARE IN %s' % ('INCHES' if inch else 'MILLIMETERS'), 'TOLERANCES:']
+    row = '  '
+    for p in parts:
+        if len(row) + len(p) > 34 and row.strip():
+            lines.append(row.rstrip())
+            row = '  '
+        row += p + '    '
+    if row.strip():
+        lines.append(row.rstrip())
+    ang = props.get('tol_angle')
+    ang = DEFAULT_ANGLE_TOL if ang in (None, '') else float(ang)
+    lines.append('  ANGLES \u00b1%s\u00b0' % fmt_tol_value(ang, False))
+    lines.append('SURFACE FINISH Ra %s' % ('125 \u00b5in' if inch else '3.2 \u00b5m'))
+    lines.append('INTERPRET PER ASME Y14.5-2018')
+    return '\n'.join(lines)
+
+
+def tol_matches_block(tol, props, decimals):
+    """True when a tolerance is the same as the block tolerance for these decimals."""
+    tol = normalize_tol(tol)
+    if tol is None:
+        return True
+    bv = block_value(props, decimals)
+    if bv is None:
+        return False
+    if tol['kind'] == 'pm':
+        return abs(tol['value'] - bv) < 1e-9
+    if tol['kind'] == 'dev' and abs(tol['plus'] - tol['minus']) < 1e-9:
+        return abs(tol['plus'] - bv) < 1e-9
+    return False
 
 
 def scale_value(text):
@@ -169,8 +271,50 @@ def _t(v, d):
     return _f(v, 4)
 
 
-def dim_text(value, tol, prefix='', decimals=None):
-    """Dimension text as one or two lines. value may be a number or text."""
+def dim_text(value, tol, prefix='', decimals=None, props=None):
+    """Dimension text as one or two lines. value may be a number or text.
+
+    With props (the drawing properties), a tolerance equal to the block
+    tolerance for the shown decimals is dropped, and inch values lose the
+    leading zero.
+    """
+    tol = normalize_tol(tol)
+    inch = props is not None and units_key(props.get('units')) == 'in'
+    if props is not None and tol is not None and tol['kind'] in ('pm', 'dev'):
+        shown = _shown_decimals(value, tol, decimals)
+        if tol_matches_block(tol, props, shown):
+            tol = None
+    text = _dim_text(value, tol, prefix, decimals)
+    if inch:
+        text = '\n'.join(_strip_lead(line, prefix) for line in text.split('\n'))
+    return text
+
+
+def _shown_decimals(value, tol, decimals):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if decimals is not None:
+            return decimals
+        if tol and tol.get('decimals') is not None:
+            return tol['decimals']
+        return 2 if value != int(value) else 0
+    s = str(value)
+    return len(s.split('.', 1)[1]) if '.' in s else 0
+
+
+def _strip_lead(line, prefix):
+    out = []
+    for word in line.split(' '):
+        w = word
+        for lead in (prefix + '0.', '\u00b10.', '+0.', '-0.', '(0.', '0.'):
+            if lead and w.startswith(lead):
+                w = lead[:-2] + '.' + w[len(lead):]
+                break
+        out.append(w)
+    line = ' '.join(out)
+    return line.replace('/-0.', '/-.')
+
+
+def _dim_text(value, tol, prefix='', decimals=None):
     tol = normalize_tol(tol)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         d = decimals if decimals is not None else (tol or {}).get('decimals', 2 if value != int(value) else 0)
@@ -243,23 +387,54 @@ def tol_phrase(tol):
     return tol['kind'].upper()
 
 
-def hole_note_text(hole_tol):
-    """The hole note, or '' when no hole tolerance is set or it shows in callouts only."""
+def _own_decimals(tol):
+    """Digits a tolerance is written with (0.05 -> 2), used to pick its block tier."""
+    tol = normalize_tol(tol)
+    if tol is None:
+        return 0
+    if tol.get('decimals') is not None:
+        return tol['decimals']
+    vals = [tol.get(k) for k in ('value', 'plus', 'minus', 'upper', 'lower') if tol.get(k)]
+    best = 0
+    for v in vals:
+        s = ('%.6f' % v).rstrip('0').rstrip('.')
+        best = max(best, len(s.split('.', 1)[1]) if '.' in s else 0)
+    return best
+
+
+def hole_differs(hole_tol, props, which, decimals=None):
+    """The hole size or position tolerance when it differs from the block, else None."""
+    if not hole_tol or not hole_tol.get(which):
+        return None
+    tol = hole_tol[which]
+    if props is None:
+        return tol
+    d = _own_decimals(tol) if decimals is None else decimals
+    return None if tol_matches_block(tol, props, d) else tol
+
+
+def hole_note_text(hole_tol, props=None):
+    """The hole note, or '' when nothing differs from the block or it shows in callouts only."""
     if not hole_tol or hole_tol.get('show', 'note') == 'callout':
         return ''
     if hole_tol.get('note'):
         return str(hole_tol['note'])
     parts = []
-    if hole_tol.get('size'):
-        parts.append('HOLE SIZE %s' % tol_phrase(hole_tol['size']))
-    if hole_tol.get('position'):
-        parts.append('HOLE POSITION %s' % tol_phrase(hole_tol['position']))
+    size = hole_differs(hole_tol, props, 'size')
+    pos = hole_differs(hole_tol, props, 'position')
+    if size:
+        parts.append('HOLE SIZE %s' % tol_phrase(size))
+    if pos:
+        parts.append('HOLE POSITION %s' % tol_phrase(pos))
+    if not parts:
+        return ''
     return 'ALL HOLES UNLESS OTHERWISE SPECIFIED: %s.' % ', '.join(parts)
 
 
-def hole_callout_lines(el, hole_tol):
-    """Lines of a hole callout. The hole size tolerance is added when the
-    drawing shows it in callouts (or both), unless the callout has its own."""
+def hole_callout_lines(el, hole_tol, props=None):
+    """Lines of a hole callout. Thread specs always print. The hole size
+    tolerance is added when the drawing shows it in callouts (or both) and it
+    differs from the block tolerance, unless the callout has its own."""
     lines = []
     count = int(el.get('count') or 1)
     lead = ('%dX ' % count) if count > 1 else ''
@@ -276,13 +451,14 @@ def hole_callout_lines(el, hole_tol):
             lines.append('%s%s%s' % (lead, thread, _depth(el.get('thread_depth') or el.get('depth'))))
     else:
         dia = el.get('dia')
-        body = dim_text(_fmt_mm(dia), size_tol, prefix='\u2300') if dia not in (None, '') else ''
+        body = dim_text(_fmt_mm(dia), size_tol, prefix='\u2300', props=props) if dia not in (None, '') else ''
         body = body.replace('\n', ' / ')
         lines.append('%s%s%s' % (lead, body, _depth(el.get('depth'))))
     for extra in el.get('extra') or []:
         lines.append(str(extra))
-    if show_in_callout and hole_tol.get('position') and not el.get('position_tol_off'):
-        lines.append('POSITION %s' % tol_phrase(hole_tol['position']))
+    pos = hole_differs(hole_tol, props, 'position') if show_in_callout else None
+    if pos and not el.get('position_tol_off'):
+        lines.append('POSITION %s' % tol_phrase(pos))
     return lines
 
 

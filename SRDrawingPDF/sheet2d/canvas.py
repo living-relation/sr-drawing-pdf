@@ -34,10 +34,10 @@ DEFAULT_TOL = (
     'INTERPRET PER ASME Y14.5-2018'
 )
 
-# Tolerance block: 92 mm wide, text starts 6.5 mm below its top edge.
+# Block tolerance box: 92 mm wide, full title-block height (52 mm); text starts 9 mm below its top.
 TOL_W = 92.0
 TOL_H = 2.2
-TOL_TOP = 33.5
+TOL_TOP = 43.0
 
 
 def tol_lines(tol):
@@ -70,6 +70,8 @@ REVLOG_MAX_H = 48.0
 REVLOG_LP = 1.45
 
 BOM_COLS = (9, 9, 44, 80, 40)
+# Bottom-left anchor: 140 mm, clears the block tolerance box on size B.
+BOM_COLS_COMPACT = (9, 8, 36, 57, 30)
 # handbuilt-cad drawing/asm.py bom_table(..., h=2.0). There is no bom_table.py.
 # dwg.py turns that into points as h * (72/25.4) / 0.72, which is 7.874 pt
 # in the filed FH-200 parts list.
@@ -288,7 +290,8 @@ def draw_frame(sh, info, sheet_no, n_sheets, width=None, height=None, zones=(8, 
     box(x0 + 110, y1 - 34, x1, y1 - 24, 'MATERIAL', material, 2.6 if len(material) > 22 else 3.0)
     box(x0, y0 + 8, x0 + 30, y1 - 34, 'SCALE', info.get('scale') or '-', 3.0)
     box(x0 + 30, y0 + 8, x0 + 52, y1 - 34, 'UNITS', info.get('units') or 'mm', 3.0)
-    box(x0 + 52, y0 + 8, x0 + 80, y1 - 34, 'SIZE', info.get('size_label') or 'B (11x17)', 2.6)
+    size = str(info.get('size') or 'B')
+    box(x0 + 52, y0 + 8, x0 + 80, y1 - 34, 'SIZE', size, 3.6 if len(size) <= 3 else 2.6, True)
     box(x0 + 80, y0 + 8, x0 + 108, y1 - 34, 'SHEET', '%s OF %s' % (sheet_no, n_sheets), 3.0)
     box(x0 + 108, y0 + 8, x0 + 140, y1 - 34, 'DATE', info.get('date') or '', 2.8)
     drawn = info.get('drawn') or ''
@@ -304,9 +307,11 @@ def draw_frame(sh, info, sheet_no, n_sheets, width=None, height=None, zones=(8, 
     sh.circle((cx + 4, cy), 1.0, 'thin')
     sh.txt(a + 27, cy, '3RD ANGLE', h=1.8)
 
+    # Block tolerance box: its own box, joined to the title block, full height.
     tx0 = x0 - TOL_W
-    sh.pl([(tx0, y0), (x0, y0), (x0, y0 + 40), (tx0, y0 + 40)], 'tb', closed=True)
-    sh.txt(tx0 + 2, y0 + 38, 'UNLESS OTHERWISE SPECIFIED:', h=2.2, ha='left', va='top', bold=True)
+    sh.pl([(tx0, y0), (x0, y0), (x0, y1), (tx0, y1)], 'tb', closed=True)
+    sh.txt(tx0 + 1, y1 - 1, 'BLOCK TOLERANCE', h=1.8, ha='left', va='top')
+    sh.txt(tx0 + 2, y1 - 4.5, 'UNLESS OTHERWISE SPECIFIED:', h=2.2, ha='left', va='top', bold=True)
     sh.txt(tx0 + 2, y0 + TOL_TOP, '\n'.join(tol_lines(info.get('tol'))), h=TOL_H, ha='left', va='top')
 
     if info.get('draft'):
