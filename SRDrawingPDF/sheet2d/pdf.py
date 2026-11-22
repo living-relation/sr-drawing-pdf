@@ -61,17 +61,22 @@ def _draw_text(ops, x, y, text, h, ha, va, rot, bold, missing, faces):
     else:
         block = pitch * (n - 1)
         base0 = y + block / 2.0 - cap / 2.0
+    ang = math.radians(rot or 0)
+    c, s = math.cos(ang), math.sin(ang)
     for i, line in enumerate(lines):
         if line == '':
             continue
         tw = text_width_mm(line, h, bold)
         if ha == 'left':
-            lx = x
+            ox = 0.0
         elif ha == 'right':
-            lx = x - tw
+            ox = -tw
         else:
-            lx = x - tw / 2.0
-        ly = base0 - i * pitch
+            ox = -tw / 2.0
+        oy = base0 - y - i * pitch
+        # Offsets are along and across the text line, so rotated text keeps its anchor.
+        lx = x + c * ox - s * oy
+        ly = y + s * ox + c * oy
         ops.append(_text_op(lx, ly, line, h, bold, rot or 0, missing, faces))
 
 

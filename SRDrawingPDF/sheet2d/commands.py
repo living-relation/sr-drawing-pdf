@@ -26,6 +26,7 @@ from .model import (
     note_number,
     resolved_title,
     sheet_by_id,
+    sheet_scale,
     size_of,
 )
 from .revs import (
@@ -38,7 +39,9 @@ from .revs import (
     write_revlog,
 )
 from .settings import check_initials
-from .render import export_pdf as write_document_pdf
+from .annotate import VIEW_KINDS, hole_callout_lines, hole_note_text, normalize_hole_tol, normalize_tol
+from .annotate import view_caption as caption_lines
+from .render import dimension_text, export_pdf as write_document_pdf
 
 API_ID = 'srDrawingPdfSheetApi'
 
@@ -77,11 +80,19 @@ COMMAND_DOCS = {
     'place_note_flag': 'Place or move a note-flag balloon. It stores a note key.',
     'move_note_flag': 'Move a note flag. id is required.',
     'delete_note_flag': 'Delete a note flag. Missing id is a no-op.',
-    'place_view': 'Place or move an empty view frame.',
-    'move_view': 'Move or retitle a view frame. id is required.',
+    'place_view': 'Place or move a view frame. Views at the sheet scale get no label; see view_caption.',
+    'move_view': 'Move or change a view frame. id is required.',
     'delete_view': 'Delete a view frame. Missing id is a no-op.',
+    'view_caption': 'The caption lines a view will print (empty at the sheet scale).',
+    'set_hole_tolerance': 'Set the size and position tolerance for every hole in the file, and where it is called out.',
+    'place_dimension': 'Place or move a linear dimension. Optional tol (pm, dev, limits, basic, ref); none uses the general tolerance.',
+    'move_dimension': 'Move a dimension or change its tolerance. id is required.',
+    'delete_dimension': 'Delete a dimension. Missing id is a no-op.',
+    'place_hole_callout': 'Place or move a hole callout (count, dia or thread, tap drill, depth). Uses the hole tolerance.',
+    'move_hole_callout': 'Move or change a hole callout. id is required.',
+    'delete_hole_callout': 'Delete a hole callout. Missing id is a no-op.',
     'sheet_marks': 'Balloons and note flags on one sheet, with the numbers they show now.',
-    'check': 'Warnings: rev letter, initials, BOM overflow, dangling balloons. Export still works.',
+    'check': 'Warnings: rev letter, initials, BOM overflow, dangling balloons, view letters, hole tolerance. Export still works.',
     'export_pdf': 'Write the PDF. Returns the path, page count, and warnings.',
     'save': 'Save the drawing JSON.',
     'load': 'Replace this drawing with a JSON file.',
@@ -628,9 +639,19 @@ def _cmd_place_view(doc, args):
     if 'label' in args and args['label'] is not None:
         fields['label'] = args['label']
     if 'scale' in args:
-        fields['scale'] = args['scale']
+        fields['scale'] = args['scale'] if args['scale'] not in ('',) else None
+    if 'kind' in args and args['kind'] is not None:
+        if args['kind'] not in VIEW_KINDS:
+            raise ValueError('view kind must be one of %s' % ', '.join(VIEW_KINDS))
+        fields['kind'] = args['kind']
+    if 'letter' in args:
+        fields['letter'] = (str(args['letter']).strip().upper() or None) if args['letter'] is not None else None
+    if 'show_label' in args and args['show_label'] is not None:
+        fields['show_label'] = bool(args['show_label'])
     el = _upsert(doc, sheet_id, 'view', args.get('id'), fields, ('x', 'y', 'w', 'h'))
-    return {'id': el['id'], 'label': el.get('label') or ''}
+    el.setdefault('kind', 'standard')
+    owner, _el = find_element(doc, el['id'])
+    return {'id': el['id'], 'label': el.get('label') or '', 'caption': caption_lines(el, sheet_scale(doc, owner))}
 
 
 def _cmd_move_view(doc, args):
@@ -641,6 +662,91 @@ def _cmd_move_view(doc, args):
 
 def _cmd_delete_view(doc, args):
     return _delete_element(doc, args.get('id'), 'view')
+
+
+def _cmd_view_caption(doc, args):
+    owner, el = find_element(doc, args.get('id'))
+    if el is None or el.get('type') != 'view':
+        raise ValueError('no view %r' % args.get('id'))
+    sc = sheet_scale(doc, owner)
+    return {'id': el['id'], 'sheet_scale': sc, 'caption': caption_lines(el, sc)}
+
+
+def _cmd_set_hole_tolerance(doc, args):
+    if args.get('clear'):
+        doc.hole_tol = None
+    else:
+        doc.hole_tol = normalize_hole_tol(args, doc.hole_tol)
+    return {'hole_tol': doc.hole_tol, 'note': hole_note_text(doc.hole_tol)}
+
+
+def _owner_sheet(doc, args):
+    existing_sheet, existing = find_element(doc, args.get('id')) if args.get('id') else (None, None)
+    sheet_id = args.get('sheet') or (existing_sheet.get('id') if existing_sheet else None)
+    if not sheet_id:
+        raise ValueError('sheet is required')
+    return sheet_id, existing
+
+
+def _cmd_place_dimension(doc, args):
+    sheet_id, existing = _owner_sheet(doc, args)
+    fields = _num_fields(args, ('x1', 'y1', 'x2', 'y2', 'offset'))
+    if 'orient' in args and args['orient'] is not None:
+        if args['orient'] not in ('h', 'v', 'aligned'):
+            raise ValueError("orient must be 'h', 'v' or 'aligned'")
+        fields['orient'] = args['orient']
+    for key in ('value', 'prefix', 'view'):
+        if key in args:
+            fields[key] = args[key]
+    if 'decimals' in args:
+        fields['decimals'] = None if args['decimals'] is None else int(args['decimals'])
+    if 'role' in args:
+        if args['role'] not in (None, 'hole_position', 'hole_size'):
+            raise ValueError("role must be null, 'hole_position' or 'hole_size'")
+        fields['role'] = args['role']
+    if 'tol' in args:
+        fields['tol'] = normalize_tol(args['tol'])
+    el = _upsert(doc, sheet_id, 'dim', args.get('id'), fields, ('x1', 'y1', 'x2', 'y2'))
+    owner, _el = find_element(doc, el['id'])
+    return {'id': el['id'], 'text': dimension_text(doc, owner, el), 'tol': el.get('tol')}
+
+
+def _cmd_move_dimension(doc, args):
+    if not args.get('id'):
+        raise ValueError('id is required')
+    return _cmd_place_dimension(doc, args)
+
+
+def _cmd_delete_dimension(doc, args):
+    return _delete_element(doc, args.get('id'), 'dim')
+
+
+def _cmd_place_hole(doc, args):
+    sheet_id, existing = _owner_sheet(doc, args)
+    fields = _num_fields(args, ('x', 'y', 'ax', 'ay'))
+    for key in ('dia', 'thread', 'tap_drill', 'depth', 'thread_depth', 'drill_depth', 'extra'):
+        if key in args:
+            fields[key] = args[key]
+    if 'count' in args:
+        fields['count'] = int(args['count'] or 1)
+    if 'tol' in args:
+        fields['tol'] = normalize_tol(args['tol'])
+    if 'position_tol_off' in args:
+        fields['position_tol_off'] = bool(args['position_tol_off'])
+    if existing is None and not (fields.get('dia') not in (None, '') or fields.get('thread')):
+        raise ValueError('dia or thread is required')
+    el = _upsert(doc, sheet_id, 'hole', args.get('id'), fields, ('x', 'y', 'ax', 'ay'))
+    return {'id': el['id'], 'lines': hole_callout_lines(el, doc.hole_tol)}
+
+
+def _cmd_move_hole(doc, args):
+    if not args.get('id'):
+        raise ValueError('id is required')
+    return _cmd_place_hole(doc, args)
+
+
+def _cmd_delete_hole(doc, args):
+    return _delete_element(doc, args.get('id'), 'hole')
 
 
 def _cmd_marks(doc, args):
@@ -738,6 +844,14 @@ COMMANDS = {
     'place_view': _cmd_place_view,
     'move_view': _cmd_move_view,
     'delete_view': _cmd_delete_view,
+    'view_caption': _cmd_view_caption,
+    'set_hole_tolerance': _cmd_set_hole_tolerance,
+    'place_dimension': _cmd_place_dimension,
+    'move_dimension': _cmd_move_dimension,
+    'delete_dimension': _cmd_delete_dimension,
+    'place_hole_callout': _cmd_place_hole,
+    'move_hole_callout': _cmd_move_hole,
+    'delete_hole_callout': _cmd_delete_hole,
     'sheet_marks': _cmd_marks,
     'check': _cmd_check,
     'export_pdf': _cmd_export,
@@ -791,6 +905,14 @@ delete_note_flag = _bind('delete_note_flag')
 place_view = _bind('place_view')
 move_view = _bind('move_view')
 delete_view = _bind('delete_view')
+view_caption = _bind('view_caption')
+set_hole_tolerance = _bind('set_hole_tolerance')
+place_dimension = _bind('place_dimension')
+move_dimension = _bind('move_dimension')
+delete_dimension = _bind('delete_dimension')
+place_hole_callout = _bind('place_hole_callout')
+move_hole_callout = _bind('move_hole_callout')
+delete_hole_callout = _bind('delete_hole_callout')
 sheet_marks = _bind('sheet_marks')
 check = _bind('check')
 export_pdf = _bind('export_pdf')

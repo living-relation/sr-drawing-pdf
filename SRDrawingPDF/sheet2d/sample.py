@@ -2,7 +2,8 @@
 
 The parts are stand-ins so the public repo does not copy a filed package.
 The sheet chrome (border, zones, title block, rev table, BOM, notes, balloons)
-is what the sample is for. View frames are empty.
+is what the sample is for. View frames are empty; the dimensions and hole
+callouts sit on stand-in points to show the tolerance rules.
 """
 from .commands import execute
 
@@ -69,16 +70,42 @@ def build_sample():
         doc, _result = _run(doc, 'add_note', key=key, text=text)
     doc, _result = _run(doc, 'place_notes', id='notes1', sheet='s1', x=18, y=90, width=100)
 
+    # Views at the sheet scale (1:2 in the title block) get no label. Default
+    # views (front, top, right, trimetric) get no label either. The detail
+    # shows its scale because it differs; the section at the sheet scale does not.
     views = (
-        ('v1', 's1', 18, 175, 90, 52, 'FRONT', '1:2'),
-        ('v2', 's1', 116, 175, 90, 52, 'TOP', '1:2'),
-        ('v3', 's1', 18, 112, 90, 52, 'RIGHT', '1:2'),
-        ('v4', 's1', 116, 108, 100, 58, 'TRIMETRIC', None),
-        ('v5', 's2', 22, 130, 150, 90, 'BUILD VIEW', None),
+        ('v1', 's1', 18, 175, 90, 52, {'label': 'FRONT'}),
+        ('v2', 's1', 116, 175, 90, 52, {'label': 'TOP'}),
+        ('v3', 's1', 18, 112, 90, 52, {'label': 'RIGHT'}),
+        ('v4', 's1', 116, 108, 100, 58, {'label': 'TRIMETRIC'}),
+        ('v6', 's1', 246, 100, 70, 48, {'kind': 'section', 'letter': 'A'}),
+        ('v7', 's1', 330, 100, 60, 48, {'kind': 'detail', 'letter': 'B', 'scale': '2:1'}),
+        ('v5', 's2', 22, 130, 150, 90, {'label': 'BUILD VIEW', 'show_label': True}),
+        ('v8', 's2', 200, 130, 90, 60, {'label': 'FRONT', 'scale': '1:1'}),
     )
-    for vid, sheet, x, y, w, h, label, scale in views:
-        doc, _result = _run(
-            doc, 'place_view', id=vid, sheet=sheet, x=x, y=y, w=w, h=h, label=label, scale=scale)
+    for vid, sheet, x, y, w, h, extra in views:
+        doc, _result = _run(doc, 'place_view', id=vid, sheet=sheet, x=x, y=y, w=w, h=h, **extra)
+
+    # One hole tolerance for the file, called out in each hole callout and in a note.
+    doc, _result = _run(
+        doc, 'set_hole_tolerance', size={'kind': 'dev', 'plus': 0.1, 'minus': 0},
+        position={'kind': 'pm', 'value': 0.05}, show='both')
+    dims = (
+        ('d1', dict(x1=28, y1=183, x2=98, y2=183, orient='h', offset=-6)),
+        ('d2', dict(x1=38, y1=205, x2=88, y2=205, orient='h', offset=14, role='hole_position', decimals=2)),
+        ('d3', dict(x1=98, y1=183, x2=98, y2=215, orient='v', offset=-8, decimals=1,
+                    tol={'kind': 'pm', 'value': 0.1})),
+        ('d4', dict(x1=126, y1=185, x2=196, y2=185, orient='h', offset=-6, decimals=2,
+                    tol={'kind': 'limits', 'plus': 0.05, 'minus': 0.0})),
+    )
+    for did, extra in dims:
+        doc, _result = _run(doc, 'place_dimension', id=did, sheet='s1', **extra)
+    doc, _result = _run(
+        doc, 'place_hole_callout', id='h1', sheet='s1', count=4, dia=6.6, depth='THRU',
+        x=44, y=234, ax=38, ay=205)
+    doc, _result = _run(
+        doc, 'place_hole_callout', id='h2', sheet='s1', count=2, thread='M4x0.7 - 6H', tap_drill=3.3,
+        drill_depth=12, thread_depth=10, x=150, y=234, ax=160, ay=205)
 
     balloons = (
         ('b1', 'p1', 210, 155, 190, 145),

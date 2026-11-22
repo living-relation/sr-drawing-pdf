@@ -20,4 +20,15 @@ balloon. Note flags store the note key the same way.
 
 The tolerance block does not add an edge-break line unless the drawing
 supplies that text itself.
+
+The sheet scale comes from the title block (or the sheet's own scale). Views
+at the sheet scale print no view label and no scale label. Default views
+(front, top, right, left, back, isometric, trimetric, ...) print no label.
+A view gets a subtitle only when its scale differs or the user asks for one.
+Detail and section views keep their letter labels and add their scale only
+when it differs.
+
+Every dimension has an optional tolerance; with none, the title-block general
+tolerance applies. One hole tolerance (size and position) can be set for the
+whole file. It is called out in a hole note, in each hole callout, or both.
 """

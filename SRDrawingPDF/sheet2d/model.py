@@ -72,6 +72,7 @@ class DrawingDocument(object):
         self.notes = []
         self.sheets = []
         self.sizes = {}
+        self.hole_tol = None
 
     def to_dict(self):
         return {
@@ -84,6 +85,7 @@ class DrawingDocument(object):
             'notes': [dict(n) for n in self.notes],
             'sheets': copy.deepcopy(self.sheets),
             'sizes': copy.deepcopy(self.sizes),
+            'hole_tol': copy.deepcopy(self.hole_tol),
         }
 
     @classmethod
@@ -109,6 +111,7 @@ class DrawingDocument(object):
         doc.notes = list(data.get('notes') or [])
         doc.sheets = list(data.get('sheets') or [])
         doc.sizes = dict(data.get('sizes') or {})
+        doc.hole_tol = data.get('hole_tol') or None
         for sheet in doc.sheets:
             _observe(doc, sheet.get('id'))
             for el in sheet.get('elements') or []:
@@ -175,6 +178,24 @@ def note_number(doc, note_key):
         if note.get('key') == note_key:
             return i
     return None
+
+
+def sheet_scale(doc, sheet):
+    """The scale every view on this sheet uses unless it sets its own."""
+    return sheet.get('scale') or doc.properties.get('scale') or ''
+
+
+def notes_with_auto(doc):
+    """User notes, then the hole tolerance note when the drawing has one.
+
+    The automatic note goes last so it never renumbers a user note or a flag.
+    """
+    from .annotate import hole_note_text
+    notes = list(doc.notes)
+    text = hole_note_text(doc.hole_tol)
+    if text:
+        notes.append({'key': '_hole_tol', 'text': text})
+    return notes
 
 
 def resolved_title(doc, sheet, sheet_no, n_sheets):
@@ -333,4 +354,50 @@ def document_warnings(doc):
                 warnings.append('balloon %s has no BOM row' % el.get('id'))
             if el.get('type') == 'note_flag' and el.get('note_key') not in note_keys:
                 warnings.append('note flag %s has no note' % el.get('id'))
+    _annotation_warnings(doc, warnings)
     return warnings
+
+
+def _annotation_warnings(doc, warnings):
+    from .annotate import hole_note_text, is_default_name, same_scale, scale_value
+    letters = {}
+    has_notes_block = False
+    holes = 0
+    for sheet in doc.sheets:
+        sc = sheet_scale(doc, sheet)
+        for el in sheet.get('elements') or []:
+            kind = el.get('type')
+            if kind == 'notes':
+                has_notes_block = True
+            elif kind == 'hole':
+                holes += 1
+            elif kind == 'view':
+                vk = el.get('kind') or 'standard'
+                if vk in ('detail', 'section'):
+                    if not el.get('letter'):
+                        warnings.append('%s view %s has no letter' % (vk, el.get('id')))
+                    else:
+                        letters.setdefault(str(el['letter']).upper(), []).append(el.get('id'))
+                if el.get('scale') not in (None, '') and scale_value(el.get('scale')) is None \
+                        and str(el.get('scale')).strip().upper() != 'AS SHOWN':
+                    warnings.append('view %s scale %r is not a ratio like 1:2' % (el.get('id'), el.get('scale')))
+                if vk == 'standard' and el.get('show_label') and is_default_name(el.get('label')) \
+                        and same_scale(el.get('scale'), sc):
+                    warnings.append('view %s is a default view at the sheet scale; it normally has no label'
+                                    % el.get('id'))
+            elif kind == 'dim' and el.get('role') == 'hole_position' and not el.get('tol') \
+                    and not (doc.hole_tol or {}).get('position'):
+                warnings.append('hole position dimension %s has no tolerance; the general tolerance applies'
+                                % el.get('id'))
+        if not sc:
+            for el in sheet.get('elements') or []:
+                if el.get('type') == 'view':
+                    warnings.append('sheet %s has no scale in the title block' % sheet.get('id'))
+                    break
+    for letter, ids in letters.items():
+        if len(ids) > 1:
+            warnings.append('view letter %s is used more than once (%s)' % (letter, ', '.join(ids)))
+    if holes and not doc.hole_tol:
+        warnings.append('hole callouts use the general tolerance; set_hole_tolerance sets one for all holes')
+    if hole_note_text(doc.hole_tol) and not has_notes_block:
+        warnings.append('the hole tolerance note has no notes block to print in')
