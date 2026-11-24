@@ -17,6 +17,7 @@ Load the `SRDrawingPDF` folder into Fusion as described in [Install](install.md)
 - `tests/` — checks that do not need Fusion (manifest, the sheet model, rev letters, BOM split, balloons).
 - `dev/fusion_smoke.py` — live test that runs inside Fusion.
 - `dev/render_sample.py` — writes a sample two-sheet PDF with the command API. It does not need Fusion.
+- `dev/sheet_demo.py` — a local page for the sample sheet. It does not need Fusion.
 - `tools/check.py` — secret/path scan plus pytest. CI runs the same command.
 
 ## Coding notes
@@ -25,6 +26,16 @@ Load the `SRDrawingPDF` folder into Fusion as described in [Install](install.md)
 - Keep Spark Robotic / SR- naming in user-visible text and repository docs.
 - Work on a branch and open a pull request against `main`. Never commit to `main` directly.
 - Run `python tools/check.py` before every push. See [AGENTS.md](../AGENTS.md).
+
+## Sheet editor demo
+
+From the repo folder, in a terminal:
+
+```
+python dev/sheet_demo.py
+```
+
+Open http://127.0.0.1:8765/ . The page draws the sample sheet. Click a BOM row to highlight that part and show its thumbnail. Drag the top band of a BOM piece to move it. Split above or below the selected row. The yellow ! in the status bar is an open detail-view suggestion; Accept adds the view.
 
 ## Tests
 

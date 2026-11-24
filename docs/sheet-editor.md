@@ -199,7 +199,7 @@ Anchored pieces need no `max_height`; they may use the height of the sheet.
 
 `select_bom_row` is the hook for clicking a row. It returns the row's `thumbnail` (a path or data URI stored on the row, for example from a Fusion export) and `highlight`: the balloons that point at the row and the views whose `components` list holds the row key or its `component` token. Set `thumbnail` and `component` with `add_bom_row`, `edit_bom_row` or `load_bom_components`, and a view's `components` with `place_view`.
 
-Not done yet: the panel that shows the thumbnail and draws the highlight (the editor UI), making thumbnails during a Fusion export, filling a view's `components` from Fusion, and splitting the rev table or vertical splits.
+`dev/sheet_demo.py` draws that highlight and the thumbnail on a local page. Making thumbnails during a Fusion export, filling a view's `components` from Fusion, and splitting the rev table or vertical splits are not done.
 
 ## Tolerance block text
 

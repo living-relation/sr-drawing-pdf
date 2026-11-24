@@ -5,7 +5,26 @@ The sheet chrome (border, zones, title block, rev table, BOM, notes, balloons)
 is what the sample is for. View frames are empty; the dimensions and hole
 callouts sit on stand-in points to show the tolerance rules.
 """
+from urllib.parse import quote
+
 from .commands import execute
+
+_THUMB_COLORS = (
+    '#8aa2b2', '#c4a574', '#7d9a78', '#b07d7d', '#8e8aa8', '#c48b5a', '#6f8f8a',
+    '#a3a06a', '#7f93a8', '#b08968', '#9a7f8e', '#6e8b74', '#a67c52', '#7a8494',
+)
+
+
+def _thumb(pn, color):
+    """A small stand-in picture for the editor. Not a photo of the part."""
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='160' height='110' viewBox='0 0 160 110'>"
+        "<rect width='160' height='110' fill='#fbf9f4'/>"
+        "<rect x='30' y='16' width='100' height='56' fill='%s' stroke='#222' stroke-width='3'/>"
+        "<text x='80' y='96' text-anchor='middle' font-size='14' font-family='sans-serif' fill='#222'>%s</text>"
+        "</svg>"
+    ) % (color, pn)
+    return 'data:image/svg+xml,' + quote(svg)
 
 
 def _run(doc, command, **args):
@@ -56,7 +75,8 @@ def build_sample():
     ]
     for key, item, qty, pn, desc, mat, shown in rows:
         doc, _result = _run(
-            doc, 'add_bom_row', key=key, item=item, qty=qty, pn=pn, desc=desc, mat=mat, shown=shown)
+            doc, 'add_bom_row', key=key, item=item, qty=qty, pn=pn, desc=desc, mat=mat, shown=shown,
+            component=key, thumbnail=_thumb(pn, _THUMB_COLORS[item - 1]))
 
     # Default anchor: bottom-left corner of the frame. The table is split below
     # item 8 and the second piece sits on the other anchor, right corner above
@@ -78,11 +98,11 @@ def build_sample():
     # the sheet scale shows only its letters. No detail view is added: the
     # engine only suggests one (see suggest_details below).
     views = (
-        ('v1', 's1', 18, 175, 90, 52, {'label': 'FRONT'}),
-        ('v2', 's1', 116, 175, 90, 52, {'label': 'TOP'}),
-        ('v3', 's1', 18, 112, 90, 52, {'label': 'RIGHT'}),
-        ('v4', 's1', 116, 108, 100, 58, {'label': 'TRIMETRIC'}),
-        ('v6', 's1', 300, 112, 70, 48, {'kind': 'section', 'letter': 'A'}),
+        ('v1', 's1', 18, 175, 90, 52, {'label': 'FRONT', 'components': ['p1', 'p4']}),
+        ('v2', 's1', 116, 175, 90, 52, {'label': 'TOP', 'components': ['p2']}),
+        ('v3', 's1', 18, 112, 90, 52, {'label': 'RIGHT', 'components': ['p3']}),
+        ('v4', 's1', 116, 108, 100, 58, {'label': 'TRIMETRIC', 'components': ['p1', 'p6']}),
+        ('v6', 's1', 300, 112, 70, 48, {'kind': 'section', 'letter': 'A', 'components': ['p7']}),
         ('v5', 's2', 22, 130, 150, 90, {'label': 'BUILD VIEW', 'show_label': True}),
         ('v8', 's2', 200, 130, 90, 60, {'label': 'FRONT', 'scale': '1:1'}),
     )

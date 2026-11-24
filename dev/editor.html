@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sheet editor</title>
+<style>
+  @font-face { font-family: "DejaVu Sans"; src: url("/font/DejaVuSans.ttf"); font-weight: 400; }
+  @font-face { font-family: "DejaVu Sans"; src: url("/font/DejaVuSans-Bold.ttf"); font-weight: 700; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: "DejaVu Sans", sans-serif;
+    color: #1c1c1c;
+    background: #eceae4;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    height: 100vh;
+  }
+  header, footer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    background: #f7f6f2;
+    border-bottom: 1px solid #cfcabe;
+  }
+  footer { border-bottom: 0; border-top: 1px solid #cfcabe; }
+  h1 { font-size: 16px; margin: 0 12px 0 0; font-weight: 700; }
+  main { display: grid; grid-template-columns: 1fr 320px; min-height: 0; }
+  #sheet {
+    min-width: 0;
+    min-height: 0;
+    padding: 12px;
+    background: #d5d1c8;
+  }
+  #sheet svg { width: 100%; height: 100%; background: #fff; }
+  #sheet [data-key] { cursor: pointer; }
+  #sheet [data-drag] { cursor: grab; }
+  aside {
+    overflow: auto;
+    background: #f7f6f2;
+    border-left: 1px solid #cfcabe;
+    padding: 12px 14px 20px;
+  }
+  h2 { font-size: 13px; margin: 16px 0 6px; }
+  h2:first-child { margin-top: 0; }
+  button, .tab {
+    font: inherit;
+    font-size: 13px;
+    background: #fff;
+    border: 1px solid #8d887c;
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.primary { background: #1c1c1c; color: #fff; border-color: #1c1c1c; }
+  #bang {
+    width: 32px;
+    height: 32px;
+    font-weight: 700;
+    font-size: 18px;
+    background: #f5c400;
+    border: 1px solid #1c1c1c;
+    color: #1c1c1c;
+  }
+  #bang[hidden] { display: none; }
+  #thumb {
+    width: 160px;
+    height: 110px;
+    background: #fff;
+    border: 1px solid #cfcabe;
+    display: block;
+  }
+  #thumb.empty { display: flex; align-items: center; justify-content: center; color: #666; font-size: 12px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { margin: 0 0 4px; }
+  .rowbtn, .sug {
+    width: 100%;
+    text-align: left;
+    background: #fff;
+  }
+  .rowbtn.on { outline: 2px solid #c98400; }
+  .muted { color: #555; font-size: 12px; margin: 4px 0; }
+  .dim { font-variant-numeric: tabular-nums; white-space: pre-wrap; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  #status-text.bad { color: #8a1f1f; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sheet editor</h1>
+  <div id="tabs"></div>
+  <button id="reset" type="button">Reset sample</button>
+</header>
+<main>
+  <div id="sheet"></div>
+  <aside>
+    <h2>Part</h2>
+    <img id="thumb" class="empty" alt="">
+    <p id="part" class="muted">Click a BOM row.</p>
+    <div class="actions">
+      <button id="split-above" type="button" disabled>Split above</button>
+      <button id="split-below" type="button" disabled>Split below</button>
+    </div>
+    <p class="muted">Drag a table's top band to move that piece.</p>
+    <h2>BOM</h2>
+    <ul id="bom"></ul>
+    <h2>Suggestions</h2>
+    <ul id="sugs"></ul>
+    <h2>Dimensions</h2>
+    <ul id="dims" class="dim"></ul>
+    <h2>Hole callouts</h2>
+    <ul id="calls" class="dim"></ul>
+  </aside>
+</main>
+<footer>
+  <button id="bang" type="button" hidden>!</button>
+  <span id="status-text"></span>
+</footer>
+<script>
+var scene = null;
+var drag = null;
+
+function post(command, args) {
+  return fetch('/api/command', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({command: command, args: args || {}})
+  }).then(function (res) {
+    return res.json().then(function (body) {
+      if (!res.ok) throw new Error(body.error || 'request failed');
+      return body;
+    });
+  });
+}
+
+function showError(err) {
+  var el = document.getElementById('status-text');
+  el.textContent = err.message || String(err);
+  el.className = 'bad';
+}
+
+function load(next) {
+  scene = next;
+  draw();
+}
+
+function run(command, args) {
+  return post(command, args).then(load).catch(showError);
+}
+
+function draw() {
+  document.getElementById('sheet').innerHTML = scene.svg;
+  var svg = document.querySelector('#sheet svg');
+  svg.addEventListener('pointerdown', onDown);
+  svg.addEventListener('pointermove', onMove);
+  svg.addEventListener('pointerup', onUp);
+  tabs();
+  part();
+  list();
+  status();
+}
+
+function tabs() {
+  var box = document.getElementById('tabs');
+  box.innerHTML = '';
+  scene.sheets.forEach(function (sh) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tab';
+    b.textContent = sh.name || sh.id;
+    if (sh.id === scene.sheet.id) b.style.fontWeight = '700';
+    b.addEventListener('click', function () { run('set_sheet', {sheet: sh.id}); });
+    box.appendChild(b);
+  });
+}
+
+function part() {
+  var img = document.getElementById('thumb');
+  var text = document.getElementById('part');
+  var sel = scene.selection;
+  var on = !!(sel && sel.key);
+  document.getElementById('split-above').disabled = !on;
+  document.getElementById('split-below').disabled = !on;
+  if (!sel) {
+    img.removeAttribute('src');
+    img.className = 'empty';
+    img.alt = '';
+    text.textContent = 'Click a BOM row.';
+    return;
+  }
+  if (sel.thumbnail) {
+    img.src = sel.thumbnail;
+    img.className = '';
+    img.alt = (sel.pn || sel.key) + ' thumbnail';
+  } else {
+    img.removeAttribute('src');
+    img.className = 'empty';
+    img.alt = '';
+  }
+  var hits = (sel.highlight || []).map(function (h) { return h.type + ' ' + h.element; });
+  text.textContent = 'Item ' + sel.item + '  ' + (sel.pn || '') +
+    (hits.length ? '\nHighlighted: ' + hits.join(', ') : '\nNot on a view or balloon on this drawing.');
+}
+
+function list() {
+  var bom = document.getElementById('bom');
+  bom.innerHTML = '';
+  scene.bom.forEach(function (row) {
+    var li = document.createElement('li');
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'rowbtn' + (scene.selection && scene.selection.key === row.key ? ' on' : '');
+    b.textContent = row.item + '  ' + row.pn + '  ' + row.desc;
+    b.addEventListener('click', function () { run('select_bom_row', {key: row.key}); });
+    li.appendChild(b);
+    bom.appendChild(li);
+  });
+  var sugs = document.getElementById('sugs');
+  sugs.innerHTML = '';
+  (scene.suggestions || []).forEach(function (sug) {
+    var li = document.createElement('li');
+    li.className = 'sug';
+    var p = document.createElement('div');
+    p.textContent = sug.text;
+    var row = document.createElement('div');
+    row.className = 'actions';
+    var ok = document.createElement('button');
+    ok.type = 'button';
+    ok.className = 'primary';
+    ok.textContent = 'Accept';
+    ok.addEventListener('click', function () { run('accept_suggestion', {id: sug.id}); });
+    var no = document.createElement('button');
+    no.type = 'button';
+    no.textContent = 'Dismiss';
+    no.addEventListener('click', function () { run('dismiss_suggestion', {id: sug.id}); });
+    row.appendChild(ok);
+    row.appendChild(no);
+    li.appendChild(p);
+    li.appendChild(row);
+    sugs.appendChild(li);
+  });
+  if (!scene.suggestions.length) {
+    sugs.innerHTML = '<li class="muted">None open.</li>';
+  }
+  fill('dims', scene.dimensions);
+  fill('calls', scene.callouts);
+}
+
+function fill(id, rows) {
+  var ul = document.getElementById(id);
+  ul.innerHTML = '';
+  (rows || []).forEach(function (row) {
+    var li = document.createElement('li');
+    li.textContent = row.text;
+    ul.appendChild(li);
+  });
+}
+
+function status() {
+  var bar = scene.status_bar || {open: 0, indicator: null};
+  var bang = document.getElementById('bang');
+  var text = document.getElementById('status-text');
+  text.className = '';
+  if (bar.indicator) {
+    bang.hidden = false;
+    bang.textContent = bar.indicator.symbol || '!';
+    bang.style.background = bar.indicator.color === 'yellow' ? '#f5c400' : '#f5c400';
+    text.textContent = bar.open + (bar.open === 1 ? ' suggestion' : ' suggestions');
+  } else {
+    bang.hidden = true;
+    text.textContent = 'No open suggestions';
+  }
+}
+
+function point(svg, e) {
+  var pt = svg.createSVGPoint();
+  pt.x = e.clientX;
+  pt.y = e.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+function onDown(e) {
+  var svg = e.currentTarget;
+  var head = e.target.closest('[data-drag]');
+  var row = e.target.closest('[data-key]');
+  if (head) {
+    drag = {
+      mode: 'move', id: head.getAttribute('data-drag'),
+      x1: parseFloat(head.getAttribute('data-x1')),
+      ytop: parseFloat(head.getAttribute('data-ytop')),
+      start: point(svg, e), last: point(svg, e), moved: false
+    };
+    head.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  } else if (row) {
+    drag = {mode: 'select', key: row.getAttribute('data-key'), start: point(svg, e)};
+  }
+}
+
+function onMove(e) {
+  if (!drag || drag.mode !== 'move') return;
+  var svg = e.currentTarget;
+  var p = point(svg, e);
+  if (Math.hypot(p.x - drag.start.x, p.y - drag.start.y) > 1) drag.moved = true;
+  drag.last = p;
+}
+
+function onUp(e) {
+  if (!drag) return;
+  var svg = e.currentTarget;
+  var done = drag;
+  drag = null;
+  if (done.mode === 'select') {
+    var p = point(svg, e);
+    if (Math.hypot(p.x - done.start.x, p.y - done.start.y) < 3) {
+      run('select_bom_row', {key: done.key});
+    }
+    return;
+  }
+  if (!done.moved) return;
+  var dx = done.last.x - done.start.x;
+  var dy = -(done.last.y - done.start.y);
+  run('move_bom', {id: done.id, x1: done.x1 + dx, ytop: done.ytop + dy});
+}
+
+document.getElementById('reset').addEventListener('click', function () { run('reset'); });
+document.getElementById('split-above').addEventListener('click', function () {
+  run('split_table', {row: scene.selection.key, where: 'above'});
+});
+document.getElementById('split-below').addEventListener('click', function () {
+  run('split_table', {row: scene.selection.key, where: 'below'});
+});
+document.getElementById('bang').addEventListener('click', function () {
+  document.getElementById('sugs').scrollIntoView({block: 'nearest'});
+});
+
+fetch('/api/scene').then(function (r) { return r.json(); }).then(load).catch(showError);
+</script>
+</body>
+</html>
