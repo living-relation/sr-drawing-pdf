@@ -86,7 +86,7 @@ COMMAND_DOCS = {
     'place_note_flag': 'Place or move a note-flag balloon. It stores a note key.',
     'move_note_flag': 'Move a note flag. id is required.',
     'delete_note_flag': 'Delete a note flag. Missing id is a no-op.',
-    'place_view': 'Place or move a view frame. Views at the sheet scale get no label; see view_caption.',
+    'place_view': 'Place or move a view frame. A detail view is added with add_detail_view, not here.',
     'move_view': 'Move or change a view frame. id is required.',
     'delete_view': 'Delete a view frame. Missing id is a no-op.',
     'view_caption': 'The caption lines a view will print (empty at the sheet scale).',
@@ -682,6 +682,8 @@ def _cmd_place_view(doc, args):
     if 'kind' in args and args['kind'] is not None:
         if args['kind'] not in VIEW_KINDS:
             raise ValueError('view kind must be one of %s' % ', '.join(VIEW_KINDS))
+        if args['kind'] == 'detail' and (existing is None or existing.get('kind') != 'detail'):
+            raise ValueError('a detail view is added with add_detail_view (SOLIDWORKS Detail View options)')
         fields['kind'] = args['kind']
     if 'letter' in args:
         fields['letter'] = (str(args['letter']).strip().upper() or None) if args['letter'] is not None else None
@@ -692,7 +694,8 @@ def _cmd_place_view(doc, args):
     el = _upsert(doc, sheet_id, 'view', args.get('id'), fields, ('x', 'y', 'w', 'h'))
     el.setdefault('kind', 'standard')
     owner, _el = find_element(doc, el['id'])
-    return {'id': el['id'], 'label': el.get('label') or '', 'caption': caption_lines(el, sheet_scale(doc, owner))}
+    shown = resolved_view(doc, owner, el)
+    return {'id': el['id'], 'label': el.get('label') or '', 'caption': caption_lines(shown, sheet_scale(doc, owner))}
 
 
 def _cmd_move_view(doc, args):
@@ -710,7 +713,8 @@ def _cmd_view_caption(doc, args):
     if el is None or el.get('type') != 'view':
         raise ValueError('no view %r' % args.get('id'))
     sc = sheet_scale(doc, owner)
-    return {'id': el['id'], 'sheet_scale': sc, 'caption': caption_lines(el, sc)}
+    shown = resolved_view(doc, owner, el)
+    return {'id': el['id'], 'sheet_scale': sc, 'caption': caption_lines(shown, sc)}
 
 
 def _cmd_set_hole_tolerance(doc, args):

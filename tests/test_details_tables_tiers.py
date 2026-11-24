@@ -87,8 +87,9 @@ def test_inch_dimensions_drop_the_leading_zero():
 
 def test_sample_has_no_redundant_or_stacked_tolerance():
     texts = ' '.join(_texts(build_sample()))
-    assert '100.00 \u00b10.05' not in texts and '140.05' not in texts
-    assert '140.00' in texts and '64.0 \u00b10.1' in texts and 'POSITION' not in texts
+    assert '140.00' in texts and '140.05' not in texts
+    assert '100.00' in texts and '100.00 \u00b10.05' not in texts
+    assert '64.0 \u00b10.1' in texts and 'POSITION' not in texts
 
 
 # --- detail views ------------------------------------------------------------
@@ -146,6 +147,17 @@ def test_profile_detail_and_parent_scale_mode():
                    boundary='profile', points=[[50, 140], [70, 140], [70, 160], [50, 160]],
                    scale_mode='parent', style='connected')
     assert res['caption'] == ['DETAIL A']
+
+
+def test_place_view_cannot_add_a_detail_and_move_still_works():
+    doc = _with_parent()
+    with pytest.raises(ValueError):
+        _go(doc, 'place_view', id='front', kind='detail')
+    doc, res = _go(doc, 'add_detail_view', id='det', sheet='s1', parent='front', x=200, y=120, w=60, h=60,
+                   cx=60, cy=150, r=8)
+    doc, moved = _go(doc, 'move_view', id='det', x=210)
+    assert moved['caption'] == res['caption']
+    assert execute(doc, 'view_caption', {'id': 'det'})['result']['caption'] == res['caption']
 
 
 def test_engine_never_adds_a_detail_view():

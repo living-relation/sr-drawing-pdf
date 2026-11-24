@@ -62,7 +62,7 @@ Pass an `id` or `key` when you create something. Sending the same command again 
 | `add_note` / `edit_note` / `delete_note` | Numbered notes |
 | `place_notes` / `move_notes` / `delete_notes` | Where the notes block sits |
 | `place_note_flag` / `move_note_flag` / `delete_note_flag` | A flag balloon. Stores `note_key` |
-| `place_view` / `move_view` / `delete_view` | A view frame: `kind` (`standard`, `detail`, `section`, `auxiliary`), `label`, `letter`, `scale`, `show_label` |
+| `place_view` / `move_view` / `delete_view` | A view frame: `kind` (`standard`, `section`, `auxiliary`), `label`, `letter`, `scale`, `show_label`. A detail view is not added here |
 | `view_caption` | The caption lines a view will print. Empty for a view at the sheet scale |
 | `add_detail_view` | Engineer only: add or edit a detail view with the SOLIDWORKS Detail View options (below) |
 | `suggest_details` / `add_suggestion` | Record suggestions for the engineer. Changes no sheet |
@@ -100,7 +100,7 @@ The sheet scale is set once: the title-block `scale`, or a sheet's own `scale`. 
 - A view at a different scale gets a subtitle: `SCALE 1:1`. A view with its own name (not a default name) at a different scale also prints the name above it.
 - `show_label: true` prints the view's `label` even at the sheet scale. Use it only when the user wants that label. `check` warns when a default view asks for one.
 - Detail and section views (`kind` `detail` or `section`, with a `letter`) always print `DETAIL B` or `SECTION A-A`. They add `SCALE 2:1` only when their scale differs.
-- The engine never adds a detail view. See "Detail views" and "Suggestions" below.
+- The engine never adds a detail view, and `place_view` cannot create one. See "Detail views" and "Suggestions" below.
 - On an `AS SHOWN` sheet every view that sets a scale prints it.
 
 The caption sits under the view frame. The small bracketed name in the frame corner marks an empty frame for the editor; it is not a view label.
@@ -154,7 +154,7 @@ A dimension with `role: 'hole_position'` and no `tol` of its own uses the hole p
 
 ## Detail views
 
-Detail views are never added automatically. The engineer adds one with `add_detail_view`, or accepts a suggestion. The options follow the SOLIDWORKS Detail View PropertyManager ([help](https://my.solidworks.com/reader/onlinehelp/2021%252Fenglish%252Fsolidworks%252Fsldworks%252Fhidd_dve_detail_circle.htm/detail-view-propertymanager), [detail circle styles](https://my.solidworks.com/reader/onlinehelp/2021%252Fenglish%252Fswconnected%252Fswdotworks%252Fr_detail_circle_styles.htm/detail-circle-styles)):
+Detail views are never added automatically, and `place_view` cannot create one. The engineer adds one with `add_detail_view`, or accepts a suggestion. Both ways use the same options. The options follow the SOLIDWORKS Detail View PropertyManager ([help](https://my.solidworks.com/reader/onlinehelp/2021%252Fenglish%252Fsolidworks%252Fsldworks%252Fhidd_dve_detail_circle.htm/detail-view-propertymanager), [detail circle styles](https://my.solidworks.com/reader/onlinehelp/2021%252Fenglish%252Fswconnected%252Fswdotworks%252Fr_detail_circle_styles.htm/detail-circle-styles)):
 
 | Option | Values |
 | --- | --- |

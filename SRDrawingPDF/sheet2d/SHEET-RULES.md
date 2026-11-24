@@ -38,10 +38,12 @@ different from, the block. The file hole tolerance (size and position)
 prints the same way: in a hole note, in each hole callout, or both, and only
 where it differs. Hole callouts always carry thread specs.
 
-Detail views are never added automatically. The engine may suggest one (a
-section feature such as an o-ring groove, or small features too crowded to
-dimension at the sheet scale); suggestions show as a yellow exclamation mark
-in the status bar, and the engineer decides.
+Detail views are never added automatically, and a plain view frame is not a
+detail view. The engineer adds one with the detail-view options: a circle or
+a profile on the parent view, the circle style, the outline, and the scale.
+The engine may suggest one (a section feature such as an o-ring groove, or
+small features too crowded to dimension at the sheet scale); suggestions show
+as a yellow exclamation mark in the status bar, and the engineer decides.
 
 A BOM anchors at the bottom-left corner of the frame by default, or at the
 right corner directly above the title block. Any BOM piece can be split above

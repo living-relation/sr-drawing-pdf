@@ -67,10 +67,13 @@ def test_view_at_other_scale_gets_a_subtitle():
 
 def test_detail_and_section_keep_letters_and_show_scale_only_when_different():
     doc = _base()
-    doc, res = _go(doc, 'place_view', id='d', sheet='s1', x=20, y=100, w=40, h=40, kind='detail', letter='b')
+    doc, _r = _go(doc, 'place_view', id='front', sheet='s1', x=100, y=150, w=80, h=50, label='FRONT')
+    doc, res = _go(doc, 'add_detail_view', id='d', sheet='s1', parent='front', x=20, y=100, w=40, h=40,
+                   cx=130, cy=170, r=8, letter='b', scale_mode='sheet')
     assert res['caption'] == ['DETAIL B']
-    doc, res = _go(doc, 'place_view', id='d', scale='2:1')
+    doc, res = _go(doc, 'add_detail_view', id='d', scale_mode='custom', scale='2:1')
     assert res['caption'] == ['DETAIL B', 'SCALE 2:1']
+    assert execute(doc, 'view_caption', {'id': 'd'})['result']['caption'] == ['DETAIL B', 'SCALE 2:1']
     doc, res = _go(doc, 'place_view', id='s', sheet='s1', x=80, y=100, w=40, h=40, kind='section', letter='A')
     assert res['caption'] == ['SECTION A-A']
     doc, res = _go(doc, 'place_view', id='s', scale='1:2')
@@ -108,12 +111,24 @@ def test_bad_view_kind_rejected_and_letter_warnings():
     doc = _base()
     with pytest.raises(ValueError):
         _go(doc, 'place_view', sheet='s1', x=1, y=1, w=1, h=1, kind='exploded')
-    doc, _r = _go(doc, 'place_view', id='a', sheet='s1', x=20, y=100, w=40, h=40, kind='detail')
-    doc, _r = _go(doc, 'place_view', id='b', sheet='s1', x=80, y=100, w=40, h=40, kind='detail', letter='C')
+    with pytest.raises(ValueError):
+        _go(doc, 'place_view', sheet='s1', x=1, y=1, w=1, h=1, kind='detail', letter='B')
+    doc, _r = _go(doc, 'place_view', id='front', sheet='s1', x=20, y=160, w=60, h=40, label='FRONT')
+    doc, _r = _go(doc, 'add_detail_view', id='a', sheet='s1', parent='front', x=20, y=100, w=40, h=40,
+                  cx=40, cy=180, r=6, letter='B')
     doc, _r = _go(doc, 'place_view', id='c', sheet='s1', x=140, y=100, w=40, h=40, kind='section', letter='C')
+    doc, _r = _go(doc, 'place_view', id='e', sheet='s1', x=190, y=100, w=40, h=40, kind='section', letter='C')
+    doc, _r = _go(doc, 'place_view', id='d', sheet='s1', x=240, y=100, w=40, h=40, kind='section')
+    for sheet in doc['sheets']:
+        for el in sheet['elements']:
+            if el.get('id') == 'a':
+                el['letter'] = None
     warnings = execute(doc, 'check', {})['result']['warnings']
     assert any('detail view a has no letter' in w for w in warnings)
+    assert any('section view d has no letter' in w for w in warnings)
     assert any('view letter C is used more than once' in w for w in warnings)
+    kinds = [el.get('kind') for sheet in doc['sheets'] for el in sheet['elements'] if el.get('type') == 'view']
+    assert kinds.count('detail') == 1
 
 
 def test_missing_sheet_scale_warns():
@@ -163,7 +178,7 @@ def test_every_dimension_takes_an_optional_tolerance():
 
 def test_dimension_uses_its_view_scale():
     doc = _base()
-    doc, _r = _go(doc, 'place_view', id='det', sheet='s1', x=20, y=100, w=40, h=40, kind='detail', letter='B', scale='2:1')
+    doc, _r = _go(doc, 'place_view', id='det', sheet='s1', x=20, y=100, w=40, h=40, scale='2:1')
     doc, res = _go(doc, 'place_dimension', id='d', sheet='s1', x1=20, y1=110, x2=40, y2=110, orient='h', view='det')
     assert res['text'] == '10'
 
