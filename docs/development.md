@@ -18,6 +18,7 @@ Load the `SRDrawingPDF` folder into Fusion as described in [Install](install.md)
 - `dev/fusion_smoke.py` — live test that runs inside Fusion.
 - `dev/render_sample.py` — writes a sample two-sheet PDF with the command API. It does not need Fusion.
 - `dev/sheet_demo.py` — a local page for the sample sheet. It does not need Fusion.
+- `dev/time_views.py` — times front, top, right and trimetric views of a several-hundred-part assembly and writes a PNG. It does not need Fusion. The full set must finish in 120 seconds.
 - `tools/check.py` — secret/path scan plus pytest. CI runs the same command.
 
 ## Coding notes

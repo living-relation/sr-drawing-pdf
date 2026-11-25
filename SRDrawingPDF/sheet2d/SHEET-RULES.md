@@ -21,6 +21,13 @@ balloon. Note flags store the note key the same way.
 The tolerance block does not add an edge-break line unless the drawing
 supplies that text itself.
 
+Views are drawn from the part shapes with the fast method: one depth
+buffer, visible feature edges only, joined into continuous lines. The exact
+edge-against-every-face method is not used for the view set. Curved parts
+are silhouettes, rims and centre marks, never a net of triangle edges.
+Centre marks and centre lines stay. Tangent rims are thin solid lines.
+No view draws a hidden line.
+
 The sheet scale comes from the title block (or the sheet's own scale). Views
 at the sheet scale print no view label and no scale label. Default views
 (front, top, right, left, back, isometric, trimetric, ...) print no label.

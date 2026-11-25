@@ -207,6 +207,14 @@ The tolerance box does not add an edge-break line. Put that text in the `tol` fi
 
 Sheet rules that this package draws are in `SRDrawingPDF/sheet2d/SHEET-RULES.md`.
 
+## View generation
+
+`sheet2d.project` builds drawing views from part shapes. The view set is front, top, right and trimetric. Each view keeps only the visible edges. Hidden edges are not returned. A round part is a circle or a silhouette plus a centre mark, not the edges of its mesh. `time_view_set` reports seconds per view. The benchmark assembly has several hundred parts, and the four views together must finish in 120 seconds.
+
+```text
+python dev/time_views.py views.png
+```
+
 ## Preview outside Fusion
 
 ```text
