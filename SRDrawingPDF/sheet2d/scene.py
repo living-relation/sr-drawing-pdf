@@ -113,10 +113,24 @@ def render_svg(items, width, height, pieces=None, marks=None):
             parts.append(_wm(it, height))
     for box in _under_marks(pieces, marks):
         parts.append(_box(box, height, 'fill="%s" fill-opacity="0.35" stroke="none"' % MARK))
+    run_sty, run_d = None, []
     for it in items:
         if it[0] == 'wm':
             continue
+        if it[0] == 'pl' and len(it[1]) >= 2:
+            # Lines in a row with one style share one path: a real view is tens of thousands of lines.
+            if it[2] != run_sty and run_d:
+                parts.append(_path(''.join(run_d), height, run_sty))
+                run_d = []
+            run_sty = it[2]
+            run_d.append(_d(it[1], height, it[3]))
+            continue
+        if run_d:
+            parts.append(_path(''.join(run_d), height, run_sty))
+            run_d = []
         parts.append(_item(it, height))
+    if run_d:
+        parts.append(_path(''.join(run_d), height, run_sty))
     for box in _over_marks(pieces, marks):
         parts.append(box if isinstance(box, str) else _box(
             box, height, 'fill="none" stroke="%s" stroke-width="1.1" data-highlight="%s"' % (MARK, _esc(box.get('id') or ''))))
@@ -256,17 +270,26 @@ def _item(it, height):
 def _poly(pts, height, sty, closed, fill='none'):
     if len(pts) < 2:
         return ''
+    return _path(_d(pts, height, closed), height, sty, fill)
+
+
+def _d(pts, height, closed):
+    d = ['M %.3f %.3f' % (pts[0][0], height - pts[0][1])]
+    for x, y in pts[1:]:
+        d.append(' L %.3f %.3f' % (x, height - y))
+    if closed:
+        d.append(' Z')
+    return ''.join(d) + ' '
+
+
+def _path(d, height, sty, fill='none'):
     if sty is None:
         width, dash = 0.2, None
         cap = 'round'
     else:
         width, dash = STY.get(sty, STY['thin'])
         cap = 'butt' if sty == 'dim' else 'round'
-    d = 'M %.3f %.3f' % (pts[0][0], height - pts[0][1])
-    for x, y in pts[1:]:
-        d += ' L %.3f %.3f' % (x, height - y)
-    if closed:
-        d += ' Z'
+    d = d.rstrip()
     dash_attr = ''
     if dash:
         dash_attr = ' stroke-dasharray="%s"' % ' '.join('%.3f' % n for n in dash)

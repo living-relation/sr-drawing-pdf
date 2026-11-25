@@ -10,6 +10,7 @@ from .model import (
     resolved_view, sheet_scale, size_of,
 )
 from .pdf import write_pdf
+from .viewsheet import draw_view_lines, view_geometry
 
 
 def render_sheets(doc):
@@ -42,7 +43,12 @@ def render_sheets(doc):
             kind = el.get('type')
             if kind == 'view':
                 shown = resolved_view(doc, sheet, el)
-                draw_view_box(canvas, shown, view_caption(shown, sheet_scale(doc, sheet)))
+                caption = view_caption(shown, sheet_scale(doc, sheet))
+                geom = view_geometry(el.get('geom'))
+                if geom is not None:
+                    draw_view_lines(canvas, shown, geom, scale_value(shown.get('scale') or sheet_scale(doc, sheet)), caption)
+                else:
+                    draw_view_box(canvas, shown, caption)
                 if el.get('kind') == 'detail' and el.get('detail'):
                     draw_detail_outline(canvas, el['detail'], el, _detail_ratio(doc, sheet, el, shown))
             elif kind == 'dim':

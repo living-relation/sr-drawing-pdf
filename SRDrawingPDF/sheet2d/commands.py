@@ -691,6 +691,10 @@ def _cmd_place_view(doc, args):
         fields['show_label'] = bool(args['show_label'])
     if 'components' in args:
         fields['components'] = list(args['components'] or [])
+    if 'geom' in args:
+        # Key of the view's lines in sheet2d.viewsheet. The lines stay out of the
+        # drawing JSON; the frame follows the view when it is moved.
+        fields['geom'] = str(args['geom']) if args['geom'] else None
     el = _upsert(doc, sheet_id, 'view', args.get('id'), fields, ('x', 'y', 'w', 'h'))
     el.setdefault('kind', 'standard')
     owner, _el = find_element(doc, el['id'])

@@ -19,6 +19,8 @@ Load the `SRDrawingPDF` folder into Fusion as described in [Install](install.md)
 - `dev/render_sample.py` — writes a sample two-sheet PDF with the command API. It does not need Fusion.
 - `dev/sheet_demo.py` — a local page for the sample sheet. It does not need Fusion.
 - `dev/time_views.py` — times front, top, right and trimetric views of a several-hundred-part assembly and writes a PNG. It does not need Fusion. The full set must finish in 120 seconds. Add `--step assembly.step` to time a real assembly exported from Fusion; that needs OCP (`pip install cadquery-ocp`) and reads it through `dev/step_mesh.py`. Keep STEP files outside this repo.
+- `SRDrawingPDF/fusion_read.py` — reads the open Fusion design in short steps (visible bodies, placements, meshes) into a folder. See [Sheet editor](sheet-editor.md#real-views-from-the-open-fusion-design).
+- `dev/fusion_sheet.py` — four real views on a size B sheet at one standard scale, to PDF, from a Fusion dump or a STEP file. Prints the times.
 - `tools/check.py` — secret/path scan plus pytest. CI runs the same command.
 
 ## Coding notes
@@ -36,7 +38,7 @@ From the repo folder, in a terminal:
 python dev/sheet_demo.py
 ```
 
-Open http://127.0.0.1:8765/ . The page draws the sample sheet. Click a BOM row to highlight that part and show its thumbnail. Drag the top band of a BOM piece to move it. Split above or below the selected row. The yellow ! in the status bar is an open detail-view suggestion; Accept adds the view.
+Open http://127.0.0.1:8765/ . The page draws the sample sheet. To show real views instead, add `--fusion DUMP_FOLDER` (written by `fusion_read.py`) or `--step assembly.step` (needs OCP). Reset goes back to those views. Click a BOM row to highlight that part and show its thumbnail. Drag the top band of a BOM piece to move it. Split above or below the selected row. The yellow ! in the status bar is an open detail-view suggestion; Accept adds the view.
 
 ## Tests
 

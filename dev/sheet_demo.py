@@ -5,6 +5,11 @@ From the repo folder:
   python dev/sheet_demo.py
 
 Then open http://127.0.0.1:8765/
+
+Real views instead of the sample (four views on a B sheet at one scale):
+
+  python dev/sheet_demo.py --fusion DUMP_FOLDER   (written by fusion_read.py)
+  python dev/sheet_demo.py --step FILE.step       (needs OCP)
 """
 import json
 import os
@@ -37,8 +42,9 @@ _SPLIT = {'anchor': 'free', 'x1': 412.0, 'ytop': 245.0, 'max_height': 60.0}
 class Demo(object):
     """One sample drawing and the editor actions the page can call."""
 
-    def __init__(self):
-        self.doc = build_sample()
+    def __init__(self, build=None):
+        self._build = build or build_sample
+        self.doc = self._build()
         self.sheet_id = 's1'
         self.selected = None
 
@@ -48,7 +54,7 @@ class Demo(object):
     def command(self, name, args=None):
         args = dict(args or {})
         if name == 'reset':
-            self.doc = build_sample()
+            self.doc = self._build()
             self.sheet_id = 's1'
             self.selected = None
             return self.scene()
@@ -165,9 +171,37 @@ def serve(host='127.0.0.1', port=8765, demo=None):
     return httpd
 
 
+def real_views(fusion=None, step=None, title=None):
+    """A document builder for the editor: the four views of a real assembly."""
+    from sheet2d.viewsheet import build_view_sheet
+    if fusion:
+        from sheet2d.meshparts import load_fusion_dump
+        parts, info = load_fusion_dump(fusion)
+        name = title or info['document'] or os.path.basename(os.path.normpath(fusion))
+        source = 'Fusion'
+    else:
+        from step_mesh import load_step
+        parts, _info = load_step(step)
+        name = title or os.path.splitext(os.path.basename(step))[0]
+        source = 'STEP'
+    doc, report = build_view_sheet(parts, name, source=source)
+    print('Views at %s in %.1f s' % (report['scale'], report['seconds']))
+    return lambda: json.loads(json.dumps(doc))
+
+
 def main(argv):
-    port = int(argv[1]) if len(argv) > 1 else 8765
-    httpd = serve(port=port)
+    import argparse
+    ap = argparse.ArgumentParser(description='Local sheet editor')
+    ap.add_argument('port', nargs='?', type=int, default=8765)
+    ap.add_argument('--fusion', help='folder written by fusion_read.py')
+    ap.add_argument('--step', help='STEP file (needs OCP)')
+    ap.add_argument('--title')
+    args = ap.parse_args(argv[1:])
+    port = args.port
+    demo = None
+    if args.fusion or args.step:
+        demo = Demo(real_views(args.fusion, args.step, args.title))
+    httpd = serve(port=port, demo=demo)
     print('Sheet editor: http://127.0.0.1:%d/' % port)
     try:
         httpd.serve_forever()

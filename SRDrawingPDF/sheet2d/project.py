@@ -30,6 +30,18 @@ _BUF_W = 480
 _BUF_H = 360
 
 
+def view_extent(parts, name):
+    """(u0, u1, v0, v1) of the whole assembly in one view, in model units. No padding.
+
+    Front, top and right share axes (front u = top u, front v = right v), so frames
+    placed by these extents line up in third-angle projection.
+    """
+    toward, right, up = _basis(name)
+    u0, u1, v0, v1, _d0, _d1 = _camera_frame(parts, toward, right, up)
+    pad = 4.0
+    return u0 + pad, u1 - pad, v0 + pad, v1 - pad
+
+
 def _norm(v):
     x, y, z = v
     length = math.sqrt(x * x + y * y + z * z) or 1.0
@@ -377,6 +389,7 @@ def _project_view(parts, name, mode, buf_w, buf_h):
     return {
         'name': name, 'lines': lines, 'style_counts': _counts(lines),
         'shade': shade, 'buf': (buf_w, buf_h, origin, scale),
+        'extent': (u0 + 4.0, u1 - 4.0, v0 + 4.0, v1 - 4.0),
     }
 
 

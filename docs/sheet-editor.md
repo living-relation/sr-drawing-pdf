@@ -225,6 +225,23 @@ python dev/time_views.py views.png --step assembly.step
 
 The STEP read time is printed but not counted, because the add-in would take the bodies from Fusion directly.
 
+## Real views from the open Fusion design
+
+`SRDrawingPDF/fusion_read.py` reads the open design without exporting anything. It only reads; nothing in the design changes. It works in short steps so no single Fusion call runs long:
+
+- `list_step(out_dir)` writes `occurrences.json`: each visible body once (by component), and every visible placement with its 4x4 transform. Hidden bodies and hidden occurrences are left out.
+- `mesh_step(out_dir, start, budget=3.0, quality='low')` meshes the next unique bodies until about `budget` seconds have passed, and writes one `mesh_NNNNN.bin`. Call it again with the returned `next` until `done` is true. A body used many times is meshed once. `quality` is `'low'`, `'normal'` or `'high'`; `'normal'` gave clean lines at 1:3.
+
+Run each step as its own short Fusion script (for example through the Fusion MCP), with a pause between calls. The script loads `fusion_read.py` by file path and calls one step. It never sleeps or polls inside Fusion. Do not call the add-in's `run()` or `stop()`.
+
+The drawing work runs outside Fusion:
+
+```text
+python dev/fusion_sheet.py sheet.pdf --fusion DUMP_FOLDER
+```
+
+`sheet2d.meshparts.load_fusion_dump` turns the dump into mesh parts. Fusion meshes each face on its own, so face edges show up as repeated nodes; those become the drawn edges. `sheet2d.viewsheet.build_view_sheet` makes front, top, right and trimetric views. It picks the largest standard scale where front, top and right fit together with 16 mm gaps, and keeps the top view clear of the rev table. Top sits above front and right sits to the right of front (third angle). The trimetric uses the sheet scale if it fits to the right of the top view, else a smaller standard scale with a SCALE caption. Each view's lines are kept by a geometry key (`place_view ... geom=`), and both the PDF and the editor draw them. The script prints load, view, sheet and PDF times, and fails the run past 120 seconds.
+
 ## Preview outside Fusion
 
 ```text
