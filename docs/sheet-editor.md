@@ -215,6 +215,16 @@ Sheet rules that this package draws are in `SRDrawingPDF/sheet2d/SHEET-RULES.md`
 python dev/time_views.py views.png
 ```
 
+A part can also be a mesh: `('mesh', points, triangles, edges, smooth)`. `edges` are the body's own edges as `(polyline, style)`, with `'vis'` for sharp edges and `'thin'` for tangent edges. `smooth` holds the inner mesh edges of curved faces with the normals on both sides, so each view finds its own silhouettes. Triangles only hide things; their edges are never drawn. `dev/step_mesh.py` builds these parts from a STEP file, and the same shape fits a Fusion body's mesh and edges.
+
+To time a real assembly, export it from Fusion as STEP to a folder outside this repo, then:
+
+```text
+python dev/time_views.py views.png --step assembly.step
+```
+
+The STEP read time is printed but not counted, because the add-in would take the bodies from Fusion directly.
+
 ## Preview outside Fusion
 
 ```text

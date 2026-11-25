@@ -10,6 +10,7 @@ Centre lines use the sheet centre style. Tangent rims use the thin style.
 Sharp edges use the visible weight.
 """
 import array
+import gc
 import math
 import time
 
@@ -24,6 +25,7 @@ _TOWARD = {
     'trimetric': (1.0, -1.0, 0.85),
 }
 
+MESH_EPS_PX = 2.0
 _BUF_W = 480
 _BUF_H = 360
 
@@ -130,6 +132,8 @@ def _camera_frame(parts, toward, right, up):
     for part in parts:
         if part[0] == 'box':
             pts, _q, _e = _box_faces(part)
+        elif part[0] == 'mesh':
+            pts = part[1]
         else:
             pts, _t = _cyl_mesh(part)
         for p in pts:
@@ -218,14 +222,37 @@ def _edge_runs(z, w, h, a, b, right, up, toward, scale, origin, eps, samples=8):
 
 
 def _join(segments):
-    """Join collinear pieces that share an end. HQ draws continuous lines."""
+    """Join collinear pieces that share an end. HQ draws continuous lines.
+
+    Ends are found through a grid of _near-sized cells, so this stays fast on
+    real assemblies with tens of thousands of pieces.
+    """
     unused = []
     for a, b, style in segments:
         if abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6:
             continue
         unused.append([a, b, style])
-    out = []
+    cell = 0.15
+    grid = {}
+
+    def key(p):
+        return (int(math.floor(p[0] / cell)), int(math.floor(p[1] / cell)))
+
+    for idx, seg in enumerate(unused):
+        for end in (0, 1):
+            grid.setdefault(key(seg[end]), []).append(idx)
+
     used = [False] * len(unused)
+
+    def candidates(p):
+        kx, ky = key(p)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for idx in grid.get((kx + dx, ky + dy), ()):
+                    if not used[idx]:
+                        yield idx
+
+    out = []
     for i, seg in enumerate(unused):
         if used[i]:
             continue
@@ -235,25 +262,34 @@ def _join(segments):
         grew = True
         while grew:
             grew = False
-            for j, other in enumerate(unused):
-                if used[j] or other[2] != style:
+            for j in candidates(chain[-1]):
+                other = unused[j]
+                if other[2] != style:
                     continue
                 if _near(chain[-1], other[0]) and _colinear(chain[-2], chain[-1], other[1]):
                     chain.append(other[1])
-                    used[j] = True
-                    grew = True
                 elif _near(chain[-1], other[1]) and _colinear(chain[-2], chain[-1], other[0]):
                     chain.append(other[0])
-                    used[j] = True
-                    grew = True
-                elif _near(chain[0], other[1]) and _colinear(other[0], chain[0], chain[1]):
+                else:
+                    continue
+                used[j] = True
+                grew = True
+                break
+            if grew:
+                continue
+            for j in candidates(chain[0]):
+                other = unused[j]
+                if other[2] != style:
+                    continue
+                if _near(chain[0], other[1]) and _colinear(other[0], chain[0], chain[1]):
                     chain.insert(0, other[0])
-                    used[j] = True
-                    grew = True
                 elif _near(chain[0], other[0]) and _colinear(other[1], chain[0], chain[1]):
                     chain.insert(0, other[1])
-                    used[j] = True
-                    grew = True
+                else:
+                    continue
+                used[j] = True
+                grew = True
+                break
         out.append({'kind': 'poly', 'pts': chain, 'style': style})
     return out
 
@@ -270,6 +306,17 @@ def _colinear(a, b, c, tol=0.2):
 
 def project_view(parts, name, mode='hq', buf_w=_BUF_W, buf_h=_BUF_H):
     """One view. mode 'hq' is the fast joined view. mode 'exact' tests every edge against every triangle."""
+    # A real assembly makes millions of small tuples; the cyclic collector would rescan them all.
+    was = gc.isenabled()
+    gc.disable()
+    try:
+        return _project_view(parts, name, mode, buf_w, buf_h)
+    finally:
+        if was:
+            gc.enable()
+
+
+def _project_view(parts, name, mode, buf_w, buf_h):
     if name not in _TOWARD:
         raise ValueError('view must be one of %s' % ', '.join(VIEW_NAMES))
     if mode not in ('hq', 'exact'):
@@ -281,6 +328,9 @@ def project_view(parts, name, mode='hq', buf_w=_BUF_W, buf_h=_BUF_H):
     scale = min((buf_w - 2) / max(u1 - u0, 1e-6), (buf_h - 2) / max(v1 - v0, 1e-6))
     origin = (u0, v0)
     eps = 1.2
+    # Mesh parts: add about MESH_EPS_PX buffer pixels of slack so an edge on a
+    # sloped face is not hidden by its own face on a large, coarse view.
+    mesh_eps = eps + MESH_EPS_PX / scale
     z = array.array('f', [-1e30] * (buf_w * buf_h))
     shade = array.array('B', bytes(buf_w * buf_h))
     light = _norm(_add(toward, up, 0.65))
@@ -297,6 +347,8 @@ def project_view(parts, name, mode='hq', buf_w=_BUF_W, buf_h=_BUF_H):
                 pa, pb, pc, pd = (_project_point(p, right, up, toward) for p in (a, b, c, d))
                 _paint(z, buf_w, buf_h, pa[0], pa[1], pa[2], pb[0], pb[1], pb[2], pc[0], pc[1], pc[2], scale, origin, shade, tone)
                 _paint(z, buf_w, buf_h, pa[0], pa[1], pa[2], pc[0], pc[1], pc[2], pd[0], pd[1], pd[2], scale, origin, shade, tone)
+        elif part[0] == 'mesh':
+            _paint_mesh(part, z, buf_w, buf_h, right, up, toward, light, scale, origin, shade)
         else:
             pts, tris = _cyl_mesh(part)
             proj = [_project_point(p, right, up, toward) for p in pts]
@@ -315,6 +367,8 @@ def project_view(parts, name, mode='hq', buf_w=_BUF_W, buf_h=_BUF_H):
             for i, j in edges:
                 for a, b in _edge_runs(z, buf_w, buf_h, pts[i], pts[j], right, up, toward, scale, origin, eps):
                     segments.append((a, b, 'vis'))
+        elif part[0] == 'mesh':
+            segments.extend(_mesh_features(part, z, buf_w, buf_h, right, up, toward, scale, origin, mesh_eps))
         else:
             segments.extend(_cyl_features(part, z, buf_w, buf_h, right, up, toward, scale, origin, eps, circles))
     lines = _join(segments) if mode == 'hq' else [
@@ -324,6 +378,59 @@ def project_view(parts, name, mode='hq', buf_w=_BUF_W, buf_h=_BUF_H):
         'name': name, 'lines': lines, 'style_counts': _counts(lines),
         'shade': shade, 'buf': (buf_w, buf_h, origin, scale),
     }
+
+
+def _paint_mesh(part, z, w, h, right, up, toward, light, scale, origin, shade):
+    """Fill the depth buffer from a triangle mesh. Faces turned away are skipped."""
+    _k, pts, tris = part[0], part[1], part[2]
+    rx, ry, rz = right
+    ux, uy, uz = up
+    tx, ty, tz = toward
+    lx, ly, lz = light
+    ou, ov = origin
+    proj = [((p[0] * rx + p[1] * ry + p[2] * rz - ou) * scale,
+             (p[0] * ux + p[1] * uy + p[2] * uz - ov) * scale,
+             p[0] * tx + p[1] * ty + p[2] * tz) for p in pts]
+    for i, j, k in tris:
+        a, b, c = proj[i], proj[j], proj[k]
+        area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])
+        if area <= 1e-6:
+            continue  # turned away, or thinner than a pixel sliver
+        pa, pb, pc = pts[i], pts[j], pts[k]
+        e1 = (pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2])
+        e2 = (pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2])
+        nx = e1[1] * e2[2] - e1[2] * e2[1]
+        ny = e1[2] * e2[0] - e1[0] * e2[2]
+        nz = e1[0] * e2[1] - e1[1] * e2[0]
+        nl = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
+        tone = int(70 + 130 * max(0.0, (nx * lx + ny * ly + nz * lz) / nl))
+        _paint(z, w, h, a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2], 1.0, (0.0, 0.0), shade, tone)
+
+
+def _mesh_features(part, z, w, h, right, up, toward, scale, origin, eps):
+    """Visible B-rep edges of a mesh part, and the silhouettes of its curved faces."""
+    edges = part[3] if len(part) > 3 else ()
+    smooth = part[4] if len(part) > 4 else ()
+    segs = []
+    for poly, style in edges:
+        prev = poly[0]
+        for p in poly[1:]:
+            # Short pieces need fewer depth samples; long straight edges get more.
+            du = (p[0] - prev[0]) * right[0] + (p[1] - prev[1]) * right[1] + (p[2] - prev[2]) * right[2]
+            dv = (p[0] - prev[0]) * up[0] + (p[1] - prev[1]) * up[1] + (p[2] - prev[2]) * up[2]
+            samples = max(1, min(8, int(math.sqrt(du * du + dv * dv) * scale / 3.0)))
+            for a, b in _edge_runs(z, w, h, prev, p, right, up, toward, scale, origin, eps, samples):
+                segs.append((a, b, style))
+            prev = p
+    tx, ty, tz = toward
+    for a, b, n1, n2 in smooth:
+        f1 = n1[0] * tx + n1[1] * ty + n1[2] * tz
+        f2 = n2[0] * tx + n2[1] * ty + n2[2] * tz
+        if f1 * f2 >= 0.0:
+            continue
+        for p, q in _edge_runs(z, w, h, a, b, right, up, toward, scale, origin, eps, 1):
+            segs.append((p, q, 'vis'))
+    return segs
 
 
 def _counts(lines):
@@ -486,6 +593,7 @@ def _blit_view(rgb, w, h, ox, oy, px, view, span):
     scale = (px - 8) / max(u1 - u0, v1 - v0, 1e-6)
     shade, (bw, bh, origin, bscale) = view.get('shade'), view.get('buf', (0, 0, (0, 0), 1))
     if shade is not None and bw:
+        cell = max(0, int(scale / bscale))
         for sy in range(bh):
             for sx in range(bw):
                 tone = shade[sy * bw + sx]
@@ -495,9 +603,14 @@ def _blit_view(rgb, w, h, ox, oy, px, view, span):
                 v = origin[1] + (sy + 0.5) / bscale
                 x = int(ox + 4 + (u - u0) * scale)
                 y = int(oy + px - 4 - (v - v0) * scale)
-                if 0 <= x < w and 0 <= y < h:
-                    i = (y * w + x) * 3
-                    rgb[i:i + 3] = bytes((tone, tone, tone))
+                # Fill the whole buffer cell so the shading has no pixel gaps.
+                for yy in range(y - cell, y + 1):
+                    if 0 <= yy < h:
+                        row = yy * w
+                        for xx in range(x, x + cell + 1):
+                            if 0 <= xx < w:
+                                i = (row + xx) * 3
+                                rgb[i:i + 3] = bytes((tone, tone, tone))
     def pix(p):
         return (int(ox + 4 + (p[0] - u0) * scale), int(oy + px - 4 - (p[1] - v0) * scale))
     for line in view['lines']:
