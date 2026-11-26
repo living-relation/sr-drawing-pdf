@@ -23,21 +23,28 @@ PRESETS = {
     'hq': ('xq', 'exact'),
 }
 
-_ENGINES = {
-    'xq': _xq(),
-    'fusion': _fusion(),
-}
+# Built on first use. Building it at import time loads vieweng.xq while that
+# module is still importing this package, which crashes a worker process.
+_ENGINES = None
+
+
+def _registry():
+    global _ENGINES
+    if _ENGINES is None:
+        _ENGINES = {'xq': _xq(), 'fusion': _fusion()}
+    return _ENGINES
 
 
 def engine_names():
-    return tuple(_ENGINES)
+    return tuple(_registry())
 
 
 def get_engine(name):
+    engines = _registry()
     key = (name or '').strip().lower()
-    if key not in _ENGINES:
-        raise ValueError('view engine must be one of %s' % ', '.join(_ENGINES))
-    return _ENGINES[key]
+    if key not in engines:
+        raise ValueError('view engine must be one of %s' % ', '.join(engines))
+    return engines[key]
 
 
 def engine_for_preset(preset):

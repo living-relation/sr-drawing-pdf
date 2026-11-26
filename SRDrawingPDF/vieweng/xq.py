@@ -872,6 +872,22 @@ def _cpu_workers(requested, jobs):
     return max(1, min(int(requested), max(1, jobs)))
 
 
+def _process_pool(width):
+    """Workers start clean. They import this module; they do not re-run the caller's script.
+
+    Fusion launches a script as the main file. The default pool on Windows
+    would start that script again. Spawn starts from this module instead.
+    """
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    return ProcessPoolExecutor(max_workers=width, mp_context=mp.get_context('spawn'))
+
+
+def _worker_ping(value):
+    """Used to prove a spawned worker can import this module."""
+    return value + 1
+
+
 def _sample_prototypes(shapes, defl, step, workers):
     """Sample every prototype. Several at once when the machine has more than one core."""
     paths = [_write_temp_brep(shape, i) for i, shape in enumerate(shapes)]
@@ -879,8 +895,7 @@ def _sample_prototypes(shapes, defl, step, workers):
     width = _cpu_workers(workers, len(jobs))
     try:
         if width > 1 and len(jobs) > 1:
-            from concurrent.futures import ProcessPoolExecutor
-            pool = ProcessPoolExecutor(width)
+            pool = _process_pool(width)
             parts = list(pool.map(_sample_edges, jobs))
             pool.shutdown()
         else:
@@ -902,8 +917,7 @@ def _edges(shape, defl, step, workers):
     bounds = [int(v) for v in np.linspace(0, count, workers + 1)]
     jobs = [(cache, bounds[i], bounds[i + 1], defl, step) for i in range(workers)]
     if workers > 1:
-        from concurrent.futures import ProcessPoolExecutor
-        pool = ProcessPoolExecutor(workers)
+        pool = _process_pool(workers)
         parts = list(pool.map(_sample_edges, jobs))
         pool.shutdown()
     else:
