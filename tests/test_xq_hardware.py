@@ -88,3 +88,37 @@ def test_quick_outline_matches_exact_on_a_screw(tmp_path):
     quick, _t = engine.project_views(('top',), step=str(step), mode='quick')
     assert _radii(exact['top']) == _radii(quick['top'])
     assert _radii(quick['top']) and all(r > 3.5 for r in _radii(quick['top']))
+
+
+def _poly_length(line):
+    pts = line.get('pts') or []
+    total = 0.0
+    for a, b in zip(pts, pts[1:]):
+        total += ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) ** 0.5
+    return total
+
+
+def test_a_handle_bar_keeps_its_side_lines(tmp_path):
+    axis = gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0))
+    bar = BRepPrimAPI_MakeCylinder(axis, 4.0, 80.0).Shape()
+    step = tmp_path / 'bar.step'
+    _write_named(str(step), [(bar, 'handle bar')])
+    for mode in ('exact', 'quick'):
+        views, _timing = get_engine('xq').project_views(('front',), step=str(step), mode=mode)
+        long = [line for line in views['front']['lines'] if line['kind'] == 'poly' and _poly_length(line) > 40]
+        assert long, mode
+
+
+def test_the_silhouette_test_does_not_loop_every_screw():
+    import time
+    import numpy as np
+    from vieweng.xq import _outer_silhouettes
+    grid = np.zeros((64, 64), np.uint8)
+    grid[16:48, 16:48] = 1
+    masks = [(np.array([i * 20.0, 0.0]), 0.2, grid) for i in range(40)]
+    segs = np.random.default_rng(0).random((20000, 2, 2)) * 800
+    started = time.perf_counter()
+    keep = _outer_silhouettes(segs, masks)
+    elapsed = time.perf_counter() - started
+    assert keep.shape == (20000,)
+    assert elapsed < 0.5

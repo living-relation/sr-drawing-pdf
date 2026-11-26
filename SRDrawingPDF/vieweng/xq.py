@@ -747,7 +747,7 @@ def _outline_edges(flat, counts, tri2, analytic=None, right=None, up=None, mask=
     spans = np.cumsum(np.r_[0, counts])
     keep = np.ones(len(counts), dtype=bool)
     n = grid.shape[0]
-    probe = 1.5 * cell
+    probe = 0.75 * cell
 
     def inside(point):
         ix = int((point[0] - origin[0]) / cell)
@@ -787,29 +787,27 @@ def _outline_edges(flat, counts, tri2, analytic=None, right=None, up=None, mask=
 
 
 def _outer_silhouettes(segs, masks):
-    """True for silhouette pieces that are not inside a fastener head."""
+    """True for silhouette pieces on the outside of a fastener, not in the head.
+
+    One lookup for every piece. A piece with the head on both sides is the
+    recess. A piece with air on one side is the outline, including a handle bar
+    that is not a fastener at all.
+    """
     import numpy as np
     keep = np.ones(len(segs), dtype=bool)
     if not len(segs) or not masks:
         return keep
+    mids = (segs[:, 0] + segs[:, 1]) * 0.5
+    chords = segs[:, 1] - segs[:, 0]
+    length = np.hypot(chords[:, 0], chords[:, 1])
+    scale = np.maximum(length, 1e-12)
+    normal = np.stack([-chords[:, 1] / scale, chords[:, 0] / scale], axis=1)
+    usable = length > 1e-9
     for origin, cell, grid in masks:
-        n = grid.shape[0]
-        probe = 1.5 * cell
-
-        def inside(point, origin=origin, cell=cell, grid=grid, n=n):
-            ix = int((point[0] - origin[0]) / cell)
-            iy = int((point[1] - origin[1]) / cell)
-            return 0 <= ix < n and 0 <= iy < n and grid[iy, ix] == 1
-
-        mids = (segs[:, 0] + segs[:, 1]) * 0.5
-        chords = segs[:, 1] - segs[:, 0]
-        length = np.hypot(chords[:, 0], chords[:, 1])
-        for i in range(len(segs)):
-            if not keep[i] or length[i] < 1e-9:
-                continue
-            normal = np.array([-chords[i, 1], chords[i, 0]]) / length[i] * probe
-            if inside(mids[i] + normal) and inside(mids[i] - normal):
-                keep[i] = False
+        probe = 0.75 * cell
+        side_a = _mask_hits(mids + normal * probe, origin, cell, grid)
+        side_b = _mask_hits(mids - normal * probe, origin, cell, grid)
+        keep &= ~(usable & side_a & side_b)
     return keep
 
 
@@ -862,7 +860,33 @@ def _fill_mask(tri2, n=64):
         beta = (v0[:, None, 0] * rel[:, :, 1] - rel[:, :, 0] * v0[:, None, 1]) / den[:, None]
         inside = (alpha >= -1e-6) & (beta >= -1e-6) & (alpha + beta <= 1.0 + 1e-6)
         covered[inside.any(axis=0)] = 1
-    return lo, cell, covered.reshape(n, n)
+    grid = covered.reshape(n, n)
+    return lo, cell, _fill_holes(grid)
+
+
+def _fill_holes(grid):
+    """Fill across each row. A socket hole then counts as inside the head."""
+    import numpy as np
+    width = grid.shape[1]
+    index = np.arange(width)
+    present = grid.astype(bool)
+    last = np.where(present, index, -1).max(1)
+    first = np.where(present, index, width).min(1)
+    cols = index[None, :]
+    span = (cols >= first[:, None]) & (cols <= last[:, None]) & (last[:, None] >= 0)
+    return np.where(span, np.uint8(1), grid)
+
+
+def _mask_hits(points, origin, cell, grid):
+    """Which points land on a filled mask cell. Vectorized."""
+    import numpy as np
+    n = grid.shape[0]
+    ix = np.floor((points[:, 0] - origin[0]) / cell).astype(int)
+    iy = np.floor((points[:, 1] - origin[1]) / cell).astype(int)
+    ok = (ix >= 0) & (ix < n) & (iy >= 0) & (iy < n)
+    inside = np.zeros(len(points), dtype=bool)
+    inside[ok] = grid[iy[ok], ix[ok]] == 1
+    return inside
 
 
 def _cpu_workers(requested, jobs):
