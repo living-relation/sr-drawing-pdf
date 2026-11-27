@@ -1,5 +1,9 @@
 # SR Drawing PDF
 
+> **Moved.** This repo is archived. All code and history now live in
+> [living-relation/sr-drawing-pack](https://github.com/living-relation/sr-drawing-pack) (`SRDrawingPDF/` folder).
+> Point the Fusion AddIns junction at that clone's `SRDrawingPDF` folder. Nothing new goes here.
+
 A Spark Robotic Fusion add-in that makes a four-view technical drawing of the active design and
 exports it as a PDF.
 

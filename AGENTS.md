@@ -1,5 +1,7 @@
 # Agent rules for sr-drawing-pdf
 
+- **Archived.** Work in living-relation/sr-drawing-pack instead (its ADR-065). Do not open new PRs here.
+
 - This repo is **public**. Never commit secrets, tokens, personal or machine paths, or vendor CAD
   files (STEP, f3d, SLDPRT, and the like). `tools/check.py` scans for these.
 - Work on a branch and open a PR. Never commit to `main`. Delete the branch once it is merged.
