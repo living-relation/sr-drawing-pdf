@@ -557,12 +557,27 @@ FASTENER_L_MM = 200.0
 _FASTENER_NAME = re.compile(
     r'\b(screws?|bolts?|nuts?|washers?|standoffs?|inserts?|shcs|bhcs|fhcs|rivets?|fasteners?)\b',
     re.I)
+# A part that only names a fastener ("ball nut", "screw plate") is not one.
+_NOT_FASTENER = re.compile(
+    r'\b(ball ?nuts?|ball ?screws?|lead ?screws?|plates?|housings?|brackets?|carriages?|rails?|pinions?|blocks?)\b',
+    re.I)
 
 
 def name_is_fastener(name):
-    """True for a real fastener name. A connector, handle, or rail is not one."""
-    text = (name or '').lower().replace('stand-off', 'standoff').replace('stand off', 'standoff')
-    if not text:
+    """True for a real fastener name. A connector, handle, or rail is not one.
+
+    Uses the same rules as sheet2d.meshparts.is_hardware, so SR Fastener style
+    codes (SBH-, SO-, NHX-, FHS-, WSL- ...) count, and connector plugs,
+    terminals and USB inserts do not.
+    """
+    from sheet2d.meshparts import NOT_HARDWARE_RE, is_hardware
+    raw = name or ''
+    text = raw.lower().replace('stand-off', 'standoff').replace('stand off', 'standoff')
+    if not text or _NOT_FASTENER.search(text):
+        return False
+    if is_hardware(raw):
+        return True
+    if NOT_HARDWARE_RE.search(text) or re.search(r'\busb\b', text):
         return False
     return _FASTENER_NAME.search(text) is not None
 

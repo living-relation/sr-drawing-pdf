@@ -54,6 +54,15 @@ def test_fastener_names_are_screws_not_connectors():
     assert not name_is_fastener('')
 
 
+def test_sr_fastener_style_codes_are_fasteners():
+    for name in ('SBH-M3-0.5 x 8', 'SO-M3-6ZI', 'FHS-M3-8', 'NHX-M3', 'NTN-M4', 'WSL-M2',
+                 'M3x06_ISO7045 v1', 'M4x10 phillips'):
+        assert name_is_fastener(name), name
+    for name in ('Screw Plug', 'USB insert', 'jam nut connector', 'terminal screw',
+                 'Z carriage plate', 'pinion', 'ball nut housing plate', 'ball nut', 'lead screw'):
+        assert not name_is_fastener(name), name
+
+
 def test_a_screw_is_hardware_and_a_box_is_not():
     screw = _holed(0)
     assert _is_fastener(screw, 'M3 SHCS')
